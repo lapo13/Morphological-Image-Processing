@@ -1,4 +1,5 @@
 .vscode
+.DS_Store
 brain-cancer-mri-dataset
 OpenMP/build
 OpenMP/main
