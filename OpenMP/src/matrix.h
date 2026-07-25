@@ -12,5 +12,6 @@ typedef struct {
 void allocate_matrix(matrix* matrix, int rows, int cols);
 void free_matrix(matrix* matrix);
 void print_matrix(matrix* matrix);
+void copy_matrix(matrix* src, matrix* dest);
 
 #endif

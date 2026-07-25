@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "matrix.h"
 
@@ -23,9 +24,22 @@ void free_matrix(matrix* matrix) {
 void allocate_matrix(matrix* matrix, int rows, int cols) {
     matrix->rows = rows;
     matrix->cols = cols;
-    matrix->data = (u_int8_t**)malloc(rows*sizeof(u_int8_t*)+cols*rows*sizeof(u_int8_t));
+
+    size_t total_size = rows*sizeof(u_int8_t*) + cols*rows*sizeof(u_int8_t);
+    matrix->data = (u_int8_t**)malloc(total_size);
+    memset(matrix->data, 0, total_size);
+
     matrix->data[0] = (u_int8_t*)(matrix->data + rows);
     for (int j = 1; j < rows; j++) {
         matrix->data[j] = matrix->data[j-1] + cols;
+    }
+}
+
+void copy_matrix(matrix* src, matrix* dest) {
+    allocate_matrix(dest, src->rows, src->cols);
+    for (int i = 0; i < src->rows; i++) {
+        for (int j = 0; j < src->cols; j++) {
+            dest->data[i][j] = src->data[i][j];
+        }
     }
 }

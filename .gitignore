@@ -1,1 +1,5 @@
 .vscode
+brain-cancer-mri-dataset
+OpenMP/build
+OpenMP/main
+OpenMP/output
