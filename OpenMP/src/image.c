@@ -16,6 +16,8 @@ void load_image(const char* filename, matrix* img) {
           exit(EXIT_FAILURE);
      }
      allocate_matrix(img, height, width);
+     #pragma omp for collapse(2) // Collapse is a directive that allows the parallelization of nested loops,
+     // improving performance by distributing iterations across threads. 
      for (int i = 0; i < height; i++) {
           for (int j = 0; j < width; j++) {
                img->data[i][j] = data[i * width + j];
@@ -31,38 +33,45 @@ void save_image(const char* filename, matrix* img) {
      }
 }
 
-void pad_image(matrix* img, int padding_size, u_int8_t fill_value) {
-    matrix padded_img;
+void pad_image(matrix* img, matrix* padded_img, int padding_size, u_int8_t fill_value) {
     int new_rows = img->rows + 2 * padding_size;
     int new_cols = img->cols + 2 * padding_size;
-    allocate_matrix(&padded_img, new_rows, new_cols);
+    allocate_matrix(padded_img, new_rows, new_cols);
 
-    memset(padded_img.data[0], fill_value, new_rows * new_cols);
+    #pragma omp single
+    memset(padded_img->data[0], fill_value, new_rows * new_cols);
 
+    #pragma omp for collapse(2)
     for (int i = 0; i < img->rows; i++) {
         for (int j = 0; j < img->cols; j++) {
-            padded_img.data[i + padding_size][j + padding_size] = img->data[i][j];
+            padded_img->data[i + padding_size][j + padding_size] = img->data[i][j];
         }
     }
     free_matrix(img);
-    img->rows = new_rows;
-    img->cols = new_cols;
-    img->data = padded_img.data;
+    #pragma omp single
+    {
+        img->rows = new_rows;
+        img->cols = new_cols;
+        img->data = padded_img->data;
+    }
 }
 
-void crop_image(matrix* img, int crop_size) {
-    matrix cropped_img;
+void crop_image(matrix* img, matrix* cropped_img, int crop_size) {
     int new_rows = img->rows - 2 * crop_size;
     int new_cols = img->cols - 2 * crop_size;
-    allocate_matrix(&cropped_img, new_rows, new_cols);
+    allocate_matrix(cropped_img, new_rows, new_cols);
 
+    #pragma omp for collapse(2)
     for (int i = 0; i < new_rows; i++) {
         for (int j = 0; j < new_cols; j++) {
-            cropped_img.data[i][j] = img->data[i + crop_size][j + crop_size];
+            cropped_img->data[i][j] = img->data[i + crop_size][j + crop_size];
         }
     }
     free_matrix(img);
-    img->rows = new_rows;
-    img->cols = new_cols;
-    img->data = cropped_img.data;
+    #pragma omp single
+    {
+        img->rows = new_rows;
+        img->cols = new_cols;
+        img->data = cropped_img->data;
+    }
 }
