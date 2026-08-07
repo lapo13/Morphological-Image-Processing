@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <float.h>
 #include <omp.h>
 
 #include "matrix.h"
@@ -12,6 +13,8 @@
 #define GRID_ROWS 4
 #define GRID_COLS 3
 #define DATASET_DIR "../brain-cancer-mri-dataset/Brain_Cancer raw MRI data/Brain_Cancer/"
+#define WARMUP_RUNS 10
+#define TIMED_RUNS 40
 
 static const char* MOSAIC_TILES[GRID_ROWS * GRID_COLS] = {
     DATASET_DIR "brain_menin/brain_menin_0001.jpg",
@@ -30,6 +33,36 @@ static const char* MOSAIC_TILES[GRID_ROWS * GRID_COLS] = {
 
 double t_start, t_end;
 timing_entry run_timings[4];
+
+typedef void (*morph_op)(matrix*, matrix*, matrix*);
+
+static void benchmark_operation(morph_op op, const char* label, matrix* input, matrix* working, matrix* se, matrix* scratch, timing_entry* out) {
+    for (int r = 0; r < WARMUP_RUNS; r++) {
+        copy_matrix(input, working);
+        op(working, se, scratch);
+    }
+
+    double sum = 0.0, min = DBL_MAX;
+    for (int r = 0; r < TIMED_RUNS; r++) {
+        copy_matrix(input, working);
+        #pragma omp single
+            t_start = omp_get_wtime();
+        op(working, se, scratch);
+        #pragma omp master
+        {
+            t_end = omp_get_wtime();
+            double d = t_end - t_start;
+            sum += d;
+            if (d < min) min = d;
+        }
+    }
+
+    #pragma omp master
+    {
+        *out = (timing_entry){label, sum / TIMED_RUNS, min};
+        printf("%s: mean=%.4f s, min=%.4f s (%d warmup + %d timed runs)\n", label, out->mean_seconds, out->min_seconds, WARMUP_RUNS, TIMED_RUNS);
+    }
+}
 
 int main() {
     matrix input_image;
@@ -70,49 +103,11 @@ int main() {
         }
 
         print_matrix(&structuring_element);
-        copy_matrix(&input_image, &eroded_image);
-        #pragma omp master
-            t_start = omp_get_wtime();
-        image_erosion(&eroded_image, &structuring_element, &scratch);
-        #pragma omp master
-        {
-            t_end = omp_get_wtime();
-            run_timings[0] = (timing_entry){"erosion", t_end - t_start};
-        }
 
-        copy_matrix(&input_image, &dilated_image);
-        #pragma omp master
-            t_start = omp_get_wtime();
-        image_dilation(&dilated_image, &structuring_element, &scratch);
-        #pragma omp master
-        {
-            t_end = omp_get_wtime();
-            run_timings[1] = (timing_entry){"dilation", t_end - t_start};
-        }
-
-        copy_matrix(&input_image, &opened_image);
-
-        #pragma omp master
-            t_start = omp_get_wtime();
-        image_opening(&opened_image, &structuring_element, &scratch);
-        #pragma omp master
-        {
-            t_end = omp_get_wtime();
-            run_timings[2] = (timing_entry){"opening", t_end - t_start};
-        }
-
-        #pragma omp master
-            printf("Performin a Closing operation (Dilation followed by Erosion)...\n");
-        copy_matrix(&input_image, &closed_image);
-
-        #pragma omp master
-            t_start = omp_get_wtime();
-        image_closing(&closed_image, &structuring_element, &scratch);
-        #pragma omp master
-        {
-            t_end = omp_get_wtime();
-            run_timings[3] = (timing_entry){"closing", t_end - t_start};
-        }
+        benchmark_operation(image_erosion, "erosion", &input_image, &eroded_image, &structuring_element, &scratch, &run_timings[0]);
+        benchmark_operation(image_dilation, "dilation", &input_image, &dilated_image, &structuring_element, &scratch, &run_timings[1]);
+        benchmark_operation(image_opening, "opening", &input_image, &opened_image, &structuring_element, &scratch, &run_timings[2]);
+        benchmark_operation(image_closing, "closing", &input_image, &closed_image, &structuring_element, &scratch, &run_timings[3]);
 
         #pragma omp master
         {

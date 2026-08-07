@@ -20,9 +20,9 @@ void log_timings_csv(timing_entry* entries, int count) {
         return;
     }
 
-    fprintf(f, "operation,time_seconds\n");
+    fprintf(f, "operation,mean_seconds,min_seconds\n");
     for (int i = 0; i < count; i++) {
-        fprintf(f, "%s,%.6f\n", entries[i].operation, entries[i].seconds);
+        fprintf(f, "%s,%.6f,%.6f\n", entries[i].operation, entries[i].mean_seconds, entries[i].min_seconds);
     }
 
     fclose(f);

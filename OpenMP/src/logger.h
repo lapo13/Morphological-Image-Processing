@@ -3,7 +3,8 @@
 
 typedef struct {
     const char* operation;
-    double seconds;
+    double mean_seconds;
+    double min_seconds;
 } timing_entry;
 
 void log_timings_csv(timing_entry* entries, int count);
