@@ -20,7 +20,6 @@ void free_matrix(matrix* matrix) {
         if (matrix->data != NULL) {
             free(matrix->data);
             matrix->data = NULL;
-            printf("Matrix memory freed successfully.\n");
         }
     }
 }

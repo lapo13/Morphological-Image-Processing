@@ -14,7 +14,7 @@ void image_erosion(matrix* img, matrix* structuring_element, matrix* scratch) {
 
     allocate_matrix(scratch, img->rows, img->cols);
 
-    #pragma omp for collapse(2) schedule(dynamic)
+    #pragma omp for schedule(static)
     for (int i = center; i < img->rows-center; i++) {
         for (int j = center; j < img->cols-center; j++) {
             int min_value = 255;
@@ -50,7 +50,7 @@ void image_dilation(matrix* img, matrix* structuring_element, matrix* scratch) {
 
     allocate_matrix(scratch, img->rows, img->cols);
 
-    #pragma omp for collapse(2) schedule(dynamic)
+    #pragma omp for schedule(static)
     for (int i = center; i < img->rows-center; i++) {
         for (int j = center; j < img->cols-center; j++) {
             int max_value = 0;
