@@ -1,7 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <omp.h>
 #include "morphologies.h"
 #include "image.h"
+
+double last_op_seconds = 0.0;
+static double op_t_start, op_t_end;
 
 void image_erosion(matrix* img, matrix* structuring_element, matrix* scratch) {
     int se_rows = structuring_element->rows;
@@ -13,6 +17,9 @@ void image_erosion(matrix* img, matrix* structuring_element, matrix* scratch) {
     pad_image(img, scratch, center, 255);
 
     allocate_matrix(scratch, img->rows, img->cols);
+
+    #pragma omp single
+        op_t_start = omp_get_wtime();
 
     #pragma omp for schedule(static)
     for (int i = center; i < img->rows-center; i++) {
@@ -32,9 +39,15 @@ void image_erosion(matrix* img, matrix* structuring_element, matrix* scratch) {
         }
      }
 
+    #pragma omp master
+    {
+        op_t_end = omp_get_wtime();
+        last_op_seconds = op_t_end - op_t_start;
+    }
+
     free_matrix(img);
     #pragma omp single
-    img->data = scratch->data;
+        img->data = scratch->data;
 
     crop_image(img, scratch, center);
 }
@@ -49,6 +62,9 @@ void image_dilation(matrix* img, matrix* structuring_element, matrix* scratch) {
     pad_image(img, scratch, center, 0);
 
     allocate_matrix(scratch, img->rows, img->cols);
+
+    #pragma omp single
+        op_t_start = omp_get_wtime();
 
     #pragma omp for schedule(static)
     for (int i = center; i < img->rows-center; i++) {
@@ -68,21 +84,31 @@ void image_dilation(matrix* img, matrix* structuring_element, matrix* scratch) {
         }
     }
 
+    #pragma omp master
+    {
+        op_t_end = omp_get_wtime();
+        last_op_seconds = op_t_end - op_t_start;
+    }
+
     free_matrix(img);
     #pragma omp single
-    img->data = scratch->data;
+        img->data = scratch->data;
 
     crop_image(img, scratch, center);
 }
 
 void image_opening(matrix* img, matrix* structuring_element, matrix* scratch) {
     image_erosion(img, structuring_element, scratch);
-    #pragma omp flush
+    double erosion_seconds = last_op_seconds;
     image_dilation(img, structuring_element, scratch);
+    #pragma omp master
+    last_op_seconds += erosion_seconds;
 }
 
 void image_closing(matrix* img, matrix* structuring_element, matrix* scratch) {
     image_dilation(img, structuring_element, scratch);
-    #pragma omp flush
+    double dilation_seconds = last_op_seconds;
     image_erosion(img, structuring_element, scratch);
+    #pragma omp master
+    last_op_seconds += dilation_seconds;
 }

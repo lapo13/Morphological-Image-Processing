@@ -3,10 +3,10 @@
 
 typedef struct {
     const char* operation;
-    double mean_seconds;
-    double min_seconds;
-} timing_entry;
+    int run_index;
+    double seconds;
+} timing_sample;
 
-void log_timings_csv(timing_entry* entries, int count);
+void log_timings_csv(const char* run_id, timing_sample* samples, int count, int threads, int image_rows, int image_cols);
 
 #endif
