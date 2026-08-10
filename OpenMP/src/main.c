@@ -13,17 +13,17 @@
 #define DATASET_DIR "../brain-cancer-mri-dataset/Brain_Cancer raw MRI data/Brain_Cancer/"
 #define WARMUP_RUNS 5
 #define TIMED_RUNS 40
-#define MAX_MOSAIC_TILES 21
+#define MAX_MOSAIC_TILES 64
 
 static const char* MOSAIC_TILES[MAX_MOSAIC_TILES] = {
     DATASET_DIR "brain_menin/brain_menin_0001.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0002.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0003.jpg",
     DATASET_DIR "brain_tumor/brain_tumor_0001.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0002.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0003.jpg",
     DATASET_DIR "brain_glioma/brain_glioma_0001.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0002.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0002.jpg",
     DATASET_DIR "brain_glioma/brain_glioma_0002.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0003.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0003.jpg",
     DATASET_DIR "brain_glioma/brain_glioma_0003.jpg",
     DATASET_DIR "brain_menin/brain_menin_0004.jpg",
     DATASET_DIR "brain_tumor/brain_tumor_0004.jpg",
@@ -36,10 +36,52 @@ static const char* MOSAIC_TILES[MAX_MOSAIC_TILES] = {
     DATASET_DIR "brain_glioma/brain_glioma_0006.jpg",
     DATASET_DIR "brain_menin/brain_menin_0007.jpg",
     DATASET_DIR "brain_tumor/brain_tumor_0007.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0007.jpg"
+    DATASET_DIR "brain_glioma/brain_glioma_0007.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0008.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0008.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0008.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0009.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0009.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0009.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0010.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0010.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0010.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0011.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0011.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0011.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0012.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0012.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0012.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0013.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0013.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0013.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0014.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0014.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0014.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0015.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0015.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0015.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0016.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0016.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0016.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0017.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0017.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0017.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0018.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0018.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0018.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0019.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0019.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0019.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0020.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0020.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0020.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0021.jpg",
+    DATASET_DIR "brain_tumor/brain_tumor_0021.jpg",
+    DATASET_DIR "brain_glioma/brain_glioma_0021.jpg",
+    DATASET_DIR "brain_menin/brain_menin_0022.jpg"
 };
 
-// Grid layouts tested within a single run, in increasing mosaic size (rows x cols tiles).
 typedef struct {
     int rows;
     int cols;
@@ -48,15 +90,11 @@ typedef struct {
 static const grid_size TEST_GRID_SIZES[] = {
     {1, 1},
     {2, 2},
-    {2, 3},
-    {3, 3},
-    {4, 3},
     {4, 4},
-    {5, 4}
+    {8, 8}
 };
 #define NUM_TEST_SIZES (int)(sizeof(TEST_GRID_SIZES) / sizeof(TEST_GRID_SIZES[0]))
 
-// Thread counts tested within a single run (max testable on this machine is 10).
 static const int TEST_THREAD_COUNTS[] = {1, 2, 4, 6, 8, 10};
 #define NUM_THREAD_COUNTS (int)(sizeof(TEST_THREAD_COUNTS) / sizeof(TEST_THREAD_COUNTS[0]))
 
@@ -64,22 +102,22 @@ static const int TEST_THREAD_COUNTS[] = {1, 2, 4, 6, 8, 10};
 static timing_sample run_samples[MAX_SAMPLES];
 static int sample_count = 0;
 
-typedef void (*morph_op)(matrix*, matrix*, matrix*);
+typedef void (*morph_op)(matrix*, matrix*, matrix*, int);
 
-static void benchmark_operation(morph_op op, const char* label, matrix* input, matrix* working, matrix* se, matrix* scratch) {
+static void benchmark_operation(morph_op op, const char* label, matrix* input, matrix* working, matrix* se, matrix* scratch, int vectorization) {
     for (int r = 0; r < WARMUP_RUNS; r++) {
         copy_matrix(input, working);
-        op(working, se, scratch);
+        op(working, se, scratch, vectorization);
     }
 
     double sum = 0.0, min = DBL_MAX;
     for (int r = 0; r < TIMED_RUNS; r++) {
         copy_matrix(input, working);
-        op(working, se, scratch);
+        op(working, se, scratch, vectorization);
         #pragma omp master
         {
             double d = last_op_seconds;
-            run_samples[sample_count++] = (timing_sample){label, r, d};
+            run_samples[sample_count++] = (timing_sample){label, r, d, vectorization};
             sum += d;
             if (d < min) min = d;
         }
@@ -87,7 +125,67 @@ static void benchmark_operation(morph_op op, const char* label, matrix* input, m
 
     #pragma omp master
     {
-        printf("%s: mean=%.4f s, min=%.4f s (%d warmup + %d timed runs)\n", label, sum / TIMED_RUNS, min, WARMUP_RUNS, TIMED_RUNS);
+        printf("%s (vectorized=%d): mean=%.4f s, min=%.4f s (%d warmup + %d timed runs)\n", label, vectorization, sum / TIMED_RUNS, min, WARMUP_RUNS, TIMED_RUNS);
+    }
+}
+
+
+#define VEC_TEST_GRID_ROWS 2
+#define VEC_TEST_GRID_COLS 2
+
+static void run_vectorization_test(const char* run_id) {
+    matrix se;
+    matrix input_image, tile_buffer;
+    matrix eroded_image, dilated_image, opened_image, closed_image;
+    matrix scratch;
+
+    se.rows = SE_SIZE;
+    se.cols = SE_SIZE;
+
+    #pragma omp parallel num_threads(1)
+    {
+        #pragma omp single
+        {
+            printf("\n=== Vectorization comparison (1 thread) ===\n");
+        }
+
+        allocate_matrix(&se, se.rows, se.cols);
+        #pragma omp for
+        for (int i = 0; i < se.rows; i++) {
+            for (int j = 0; j < se.cols; j++) {
+                se.data[i][j] = 1;
+            }
+        }
+
+        build_mosaic_image(&input_image, &tile_buffer, MOSAIC_TILES, VEC_TEST_GRID_ROWS, VEC_TEST_GRID_COLS);
+
+        #pragma omp single
+        {
+            printf("Input Image (%dx%d tiles): %d x %d\n", VEC_TEST_GRID_ROWS, VEC_TEST_GRID_COLS, input_image.rows, input_image.cols);
+        }
+
+        for (int v = 1; v >= 0; v--) {
+            #pragma omp single
+            sample_count = 0;
+
+            benchmark_operation(image_erosion, "erosion", &input_image, &eroded_image, &se, &scratch, v);
+            benchmark_operation(image_dilation, "dilation", &input_image, &dilated_image, &se, &scratch, v);
+            benchmark_operation(image_opening, "opening", &input_image, &opened_image, &se, &scratch, v);
+            benchmark_operation(image_closing, "closing", &input_image, &closed_image, &se, &scratch, v);
+
+            #pragma omp single
+            log_timings_csv(run_id, run_samples, sample_count, 1, input_image.rows, input_image.cols);
+        }
+
+        #pragma omp master
+        {
+            free_matrix(&se);
+            free_matrix(&input_image);
+            free_matrix(&eroded_image);
+            free_matrix(&dilated_image);
+            free_matrix(&opened_image);
+            free_matrix(&closed_image);
+        }
     }
 }
 
@@ -148,35 +246,38 @@ int main() {
                     printf("Input Image (%dx%d tiles): %d x %d\n", grid_rows, grid_cols, input_image.rows, input_image.cols);
                 }
 
-                #pragma omp single
-                {
+                for (int v = 1; v >= 0; v--) {
+                    #pragma omp single
                     sample_count = 0;
-                }
 
-                benchmark_operation(image_erosion, "erosion", &input_image, &eroded_image, &structuring_element, &scratch);
-                benchmark_operation(image_dilation, "dilation", &input_image, &dilated_image, &structuring_element, &scratch);
-                benchmark_operation(image_opening, "opening", &input_image, &opened_image, &structuring_element, &scratch);
-                benchmark_operation(image_closing, "closing", &input_image, &closed_image, &structuring_element, &scratch);
+                    benchmark_operation(image_erosion, "erosion", &input_image, &eroded_image, &structuring_element, &scratch, v);
+                    benchmark_operation(image_dilation, "dilation", &input_image, &dilated_image, &structuring_element, &scratch, v);
+                    benchmark_operation(image_opening, "opening", &input_image, &opened_image, &structuring_element, &scratch, v);
+                    benchmark_operation(image_closing, "closing", &input_image, &closed_image, &structuring_element, &scratch, v);
+
+                    #pragma omp single
+                    log_timings_csv(run_id, run_samples, sample_count, num_threads, input_image.rows, input_image.cols);
+                }
 
                 #pragma omp master
                 {
-                log_timings_csv(run_id, run_samples, sample_count, num_threads, input_image.rows, input_image.cols);
+                    free_matrix(&input_image);
+                    free_matrix(&eroded_image);
+                    free_matrix(&dilated_image);
+                    free_matrix(&opened_image);
+                    free_matrix(&closed_image);
                 }
-
-                free_matrix(&input_image);
-                free_matrix(&eroded_image);
-                free_matrix(&dilated_image);
-                free_matrix(&opened_image);
-                free_matrix(&closed_image);
             }
 
             #pragma omp master
             {
-            printf("Freeing allocated memory...\n");
+                printf("Freeing allocated memory...\n");
+                free_matrix(&structuring_element);
             }
-
-            free_matrix(&structuring_element);
         }
     }
+
+    run_vectorization_test(run_id);
+
     return 0;
 }

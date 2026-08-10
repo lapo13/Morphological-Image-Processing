@@ -15,12 +15,9 @@ void print_matrix(matrix* matrix) {
 }
 
 void free_matrix(matrix* matrix) {
-    #pragma omp single
-    {
-        if (matrix->data != NULL) {
-            free(matrix->data);
-            matrix->data = NULL;
-        }
+    if (matrix->data != NULL) {
+        free(matrix->data);
+        matrix->data = NULL;
     }
 }
 

@@ -47,28 +47,40 @@ barriere implicite di questi costrutti per la sincronizzazione fra le fasi.
 ### Metodologia di benchmark ([main.c](OpenMP/src/main.c))
 
 Per ogni combinazione di **thread count** (`TEST_THREAD_COUNTS`: 1, 2, 4, 6, 8,
-10) e **dimensione immagine** (`TEST_GRID_SIZES`: da 1×1 a 5×4 tile), il
-programma:
+10), **dimensione immagine** (`TEST_GRID_SIZES`: griglie quadrate 1×1, 2×2,
+4×4, 8×8 tile — con tile da 512×512 px, mosaici da 512×512 a 4096×4096 px,
+raddoppiando ogni volta per simulare risoluzioni realistiche) e
+**vettorizzazione** (`#pragma omp simd` attivo/disattivo sul loop centrale),
+il programma:
 
 1. apre una regione `#pragma omp parallel num_threads(N)` con `N` thread;
 2. costruisce il mosaico della dimensione corrente;
-3. esegue `WARMUP_RUNS` iterazioni di riscaldamento (scartate) per ciascuna
-   delle 4 operazioni **evitando l'effetto della cold-cache**;
-4. esegue `TIMED_RUNS` iterazioni cronometrate, misurando **solo il loop
-   centrale** dell'operazione (padding e cropping sono esclusi dal tempo
-   misurato, per le operazioni di `opening` e `closing` si utilizza una somma dei tempi delle computazioni);
-5. appende ogni singola misurazione (non solo media/minimo) al CSV dei
-   risultati tramite [logger.c](OpenMP/src/logger.c).
+3. per ciascun valore di vettorizzazione (1 = simd attivo, 0 = disattivo):
+   1. esegue `WARMUP_RUNS` iterazioni di riscaldamento (scartate) per ciascuna
+      delle 4 operazioni **evitando l'effetto della cold-cache**;
+   2. esegue `TIMED_RUNS` iterazioni cronometrate, misurando **solo il loop
+      centrale** dell'operazione (padding e cropping sono esclusi dal tempo
+      misurato, per le operazioni di `opening` e `closing` si utilizza una
+      somma dei tempi delle computazioni);
+   3. appende ogni singola misurazione (non solo media/minimo) al CSV dei
+      risultati tramite [logger.c](OpenMP/src/logger.c).
 
 Il file `experiment_run/results.csv` ha quindi una riga per ogni run
 cronometrata:
 
 ```
-run_id,threads,image_rows,image_cols,operation,run_index,seconds
+run_id,threads,image_rows,image_cols,operation,run_index,seconds,vectorized
 ```
 
 `run_id` è il timestamp fissato a inizio programma e condiviso da tutte le
-righe prodotte nella stessa esecuzione.
+righe prodotte nella stessa esecuzione. `vectorized` indica se il loop
+centrale è stato eseguito con `#pragma omp simd` attivo (1) o disattivo (0),
+e permette di isolare l'effetto della vettorizzazione al variare di thread e
+dimensione immagine. Oltre allo sweep principale, a fine programma viene
+eseguito anche un confronto di controllo a thread singolo su un'immagine
+piccola e fissa (`run_vectorization_test` in [main.c](OpenMP/src/main.c)),
+utile per verificare l'effetto puro del SIMD senza il rumore dello scheduling
+tra thread.
 
 ## Come eseguire
 

@@ -20,12 +20,12 @@ void log_timings_csv(const char* run_id, timing_sample* samples, int count, int 
     }
 
     if (!file_exists) {
-        fprintf(f, "run_id,threads,image_rows,image_cols,operation,run_index,seconds\n");
+        fprintf(f, "run_id,threads,image_rows,image_cols,operation,run_index,seconds,vectorized\n");
     }
 
     for (int i = 0; i < count; i++) {
-        fprintf(f, "%s,%d,%d,%d,%s,%d,%.6f\n", run_id, threads, image_rows, image_cols,
-                samples[i].operation, samples[i].run_index, samples[i].seconds);
+        fprintf(f, "%s,%d,%d,%d,%s,%d,%.6f,%d\n", run_id, threads, image_rows, image_cols,
+                samples[i].operation, samples[i].run_index, samples[i].seconds, samples[i].vectorized);
     }
 
     fclose(f);

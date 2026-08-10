@@ -47,9 +47,10 @@ void pad_image(matrix* img, matrix* padded_img, int padding_size, u_int8_t fill_
             padded_img->data[i + padding_size][j + padding_size] = img->data[i][j];
         }
     }
-    free_matrix(img);
+
     #pragma omp single
     {
+        free_matrix(img);
         img->rows = new_rows;
         img->cols = new_cols;
         img->data = padded_img->data;
@@ -72,6 +73,7 @@ void build_mosaic_image(matrix* dest, matrix* tile_buffer, const char** tile_pat
 
     allocate_matrix(dest, tile_rows * grid_rows, tile_cols * grid_cols);
     paste_image(dest, tile_buffer, 0, 0);
+    #pragma omp single
     free_matrix(tile_buffer);
 
     for (int t = 1; t < grid_rows * grid_cols; t++) {
@@ -79,6 +81,7 @@ void build_mosaic_image(matrix* dest, matrix* tile_buffer, const char** tile_pat
         int gj = t % grid_cols;
         load_image(tile_paths[t], tile_buffer);
         paste_image(dest, tile_buffer, gi * tile_rows, gj * tile_cols);
+        #pragma omp single
         free_matrix(tile_buffer);
     }
 }
@@ -94,9 +97,10 @@ void crop_image(matrix* img, matrix* cropped_img, int crop_size) {
             cropped_img->data[i][j] = img->data[i + crop_size][j + crop_size];
         }
     }
-    free_matrix(img);
+    
     #pragma omp single
     {
+        free_matrix(img);
         img->rows = new_rows;
         img->cols = new_cols;
         img->data = cropped_img->data;

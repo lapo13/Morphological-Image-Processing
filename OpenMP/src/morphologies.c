@@ -7,7 +7,7 @@
 double last_op_seconds = 0.0;
 static double op_t_start, op_t_end;
 
-void image_erosion(matrix* img, matrix* structuring_element, matrix* scratch) {
+void image_erosion(matrix* img, matrix* structuring_element, matrix* scratch, int vectorization) {
     int se_rows = structuring_element->rows;
     int se_cols = structuring_element->cols;
     int se_center_row = se_rows / 2;
@@ -21,23 +21,33 @@ void image_erosion(matrix* img, matrix* structuring_element, matrix* scratch) {
     #pragma omp single
         op_t_start = omp_get_wtime();
 
+    int row_min[img->cols];
+
     #pragma omp for schedule(static)
-    for (int i = center; i < img->rows-center; i++) {
-        for (int j = center; j < img->cols-center; j++) {
-            int min_value = 255;
+        for (int i = center; i < img->rows-center; i++) {
+            #pragma omp simd if (vectorization != 0)
+            for (int j = center; j < img->cols-center; j++) {
+                row_min[j] = 255;
+            }
 
             for (int m = 0; m < se_rows; m++) {
+                int x = i + m - se_center_row;
                 for (int n = 0; n < se_cols; n++) {
-                    if (structuring_element->data[m][n] == 1) {
-                        int x = i + m - se_center_row;
+                    int mask = -(int)structuring_element->data[m][n];
+                    #pragma omp simd if (vectorization != 0)
+                    for (int j = center; j < img->cols-center; j++) {
                         int y = j + n - se_center_col;
-                        img->data[x][y] < min_value ? min_value = img->data[x][y] : min_value;
+                        int masked = (img->data[x][y] & mask) | (255 & ~mask);
+                        row_min[j] = masked < row_min[j] ? masked : row_min[j];
                     }
                 }
             }
-            scratch->data[i][j] = min_value;
+
+            #pragma omp simd if (vectorization != 0)
+            for (int j = center; j < img->cols-center; j++) {
+                scratch->data[i][j] = row_min[j];
+            }
         }
-     }
 
     #pragma omp master
     {
@@ -45,14 +55,16 @@ void image_erosion(matrix* img, matrix* structuring_element, matrix* scratch) {
         last_op_seconds = op_t_end - op_t_start;
     }
 
-    free_matrix(img);
     #pragma omp single
+    {
+        free_matrix(img);
         img->data = scratch->data;
+    }
 
     crop_image(img, scratch, center);
 }
 
-void image_dilation(matrix* img, matrix* structuring_element, matrix* scratch) {
+void image_dilation(matrix* img, matrix* structuring_element, matrix* scratch, int vectorization) {
     int se_rows = structuring_element->rows;
     int se_cols = structuring_element->cols;
     int se_center_row = se_rows / 2;
@@ -66,21 +78,31 @@ void image_dilation(matrix* img, matrix* structuring_element, matrix* scratch) {
     #pragma omp single
         op_t_start = omp_get_wtime();
 
+    int row_max[img->cols];
+
     #pragma omp for schedule(static)
     for (int i = center; i < img->rows-center; i++) {
+        #pragma omp simd if (vectorization != 0)
         for (int j = center; j < img->cols-center; j++) {
-            int max_value = 0;
+            row_max[j] = 0;
+        }
 
-            for (int m = 0; m < se_rows; m++) {
-                for (int n = 0; n < se_cols; n++) {
-                    if (structuring_element->data[m][n] == 1) {
-                        int x = i + m - se_center_row;
-                        int y = j + n - se_center_col;
-                        img->data[x][y] > max_value ? max_value = img->data[x][y] : max_value;
-                    }
+        for (int m = 0; m < se_rows; m++) {
+            int x = i + m - se_center_row;
+            for (int n = 0; n < se_cols; n++) {
+                int mask = -(int)structuring_element->data[m][n];
+                #pragma omp simd if (vectorization != 0)
+                for (int j = center; j < img->cols-center; j++) {
+                    int y = j + n - se_center_col;
+                    int masked = img->data[x][y] & mask;
+                    row_max[j] = masked > row_max[j] ? masked : row_max[j];
                 }
             }
-            scratch->data[i][j] = max_value;
+        }
+
+        #pragma omp simd if (vectorization != 0)
+        for (int j = center; j < img->cols-center; j++) {
+            scratch->data[i][j] = row_max[j];
         }
     }
 
@@ -90,25 +112,27 @@ void image_dilation(matrix* img, matrix* structuring_element, matrix* scratch) {
         last_op_seconds = op_t_end - op_t_start;
     }
 
-    free_matrix(img);
     #pragma omp single
+    {
+        free_matrix(img);
         img->data = scratch->data;
+    }
 
     crop_image(img, scratch, center);
 }
 
-void image_opening(matrix* img, matrix* structuring_element, matrix* scratch) {
-    image_erosion(img, structuring_element, scratch);
+void image_opening(matrix* img, matrix* structuring_element, matrix* scratch, int vectorization) {
+    image_erosion(img, structuring_element, scratch, vectorization);
     double erosion_seconds = last_op_seconds;
-    image_dilation(img, structuring_element, scratch);
+    image_dilation(img, structuring_element, scratch, vectorization);
     #pragma omp master
     last_op_seconds += erosion_seconds;
 }
 
-void image_closing(matrix* img, matrix* structuring_element, matrix* scratch) {
-    image_dilation(img, structuring_element, scratch);
+void image_closing(matrix* img, matrix* structuring_element, matrix* scratch, int vectorization) {
+    image_dilation(img, structuring_element, scratch, vectorization);
     double dilation_seconds = last_op_seconds;
-    image_erosion(img, structuring_element, scratch);
+    image_erosion(img, structuring_element, scratch, vectorization);
     #pragma omp master
     last_op_seconds += dilation_seconds;
 }
