@@ -14,7 +14,6 @@ Esame/
 └── OpenMP/                     # implementazione C + OpenMP e strumenti di analisi
     ├── src/                    # sorgenti C
     ├── external/                # librerie header-only di terze parti (stb_image)
-    ├── analysis/                 # script Python per l'analisi dei risultati
     └── experiment_run/           # output dei benchmark (CSV + grafici, non versionato)
 ```
 
