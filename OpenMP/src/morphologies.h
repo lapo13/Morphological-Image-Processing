@@ -3,7 +3,7 @@
 
 #include "matrix.h"
 
-// Wall-clock seconds spent in the last core morphology loop (padding/cropping excluded).
+// variabile resa globale per memorizzare il tempo dell'ultima operazione morfologica
 extern double last_op_seconds;
 
 void image_erosion(matrix* img, matrix* structuring_element, matrix* scratch, int vectorization);

@@ -129,66 +129,6 @@ static void benchmark_operation(morph_op op, const char* label, matrix* input, m
     }
 }
 
-
-#define VEC_TEST_GRID_ROWS 2
-#define VEC_TEST_GRID_COLS 2
-
-static void run_vectorization_test(const char* run_id) {
-    matrix se;
-    matrix input_image, tile_buffer;
-    matrix eroded_image, dilated_image, opened_image, closed_image;
-    matrix scratch;
-
-    se.rows = SE_SIZE;
-    se.cols = SE_SIZE;
-
-    #pragma omp parallel num_threads(1)
-    {
-        #pragma omp single
-        {
-            printf("\n=== Vectorization comparison (1 thread) ===\n");
-        }
-
-        allocate_matrix(&se, se.rows, se.cols);
-        #pragma omp for
-        for (int i = 0; i < se.rows; i++) {
-            for (int j = 0; j < se.cols; j++) {
-                se.data[i][j] = 1;
-            }
-        }
-
-        build_mosaic_image(&input_image, &tile_buffer, MOSAIC_TILES, VEC_TEST_GRID_ROWS, VEC_TEST_GRID_COLS);
-
-        #pragma omp single
-        {
-            printf("Input Image (%dx%d tiles): %d x %d\n", VEC_TEST_GRID_ROWS, VEC_TEST_GRID_COLS, input_image.rows, input_image.cols);
-        }
-
-        for (int v = 1; v >= 0; v--) {
-            #pragma omp single
-            sample_count = 0;
-
-            benchmark_operation(image_erosion, "erosion", &input_image, &eroded_image, &se, &scratch, v);
-            benchmark_operation(image_dilation, "dilation", &input_image, &dilated_image, &se, &scratch, v);
-            benchmark_operation(image_opening, "opening", &input_image, &opened_image, &se, &scratch, v);
-            benchmark_operation(image_closing, "closing", &input_image, &closed_image, &se, &scratch, v);
-
-            #pragma omp single
-            log_timings_csv(run_id, run_samples, sample_count, 1, input_image.rows, input_image.cols);
-        }
-
-        #pragma omp master
-        {
-            free_matrix(&se);
-            free_matrix(&input_image);
-            free_matrix(&eroded_image);
-            free_matrix(&dilated_image);
-            free_matrix(&opened_image);
-            free_matrix(&closed_image);
-        }
-    }
-}
-
 int main() {
     char run_id[32];
     time_t now = time(NULL);
@@ -276,8 +216,5 @@ int main() {
             }
         }
     }
-
-    run_vectorization_test(run_id);
-
     return 0;
 }

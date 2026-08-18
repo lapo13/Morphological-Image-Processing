@@ -15,7 +15,10 @@ void load_image(const char* filename, matrix* img) {
           fprintf(stderr, "Failed to load image: %s\n", stbi_failure_reason());
           exit(EXIT_FAILURE);
      }
-     allocate_matrix(img, height, width);
+
+     #pragma omp single 
+        allocate_matrix(img, height, width);
+
      #pragma omp for collapse(2) // Collapse is a directive that allows the parallelization of nested loops,
      // improving performance by distributing iterations across threads. 
      for (int i = 0; i < height; i++) {
@@ -36,10 +39,12 @@ void save_image(const char* filename, matrix* img) {
 void pad_image(matrix* img, matrix* padded_img, int padding_size, u_int8_t fill_value) {
     int new_rows = img->rows + 2 * padding_size;
     int new_cols = img->cols + 2 * padding_size;
-    allocate_matrix(padded_img, new_rows, new_cols);
 
     #pragma omp single
-    memset(padded_img->data[0], fill_value, new_rows * new_cols);
+    {
+        allocate_matrix(padded_img, new_rows, new_cols);
+        memset(padded_img->data[0], fill_value, new_rows * new_cols);
+    }
 
     #pragma omp for collapse(2)
     for (int i = 0; i < img->rows; i++) {
@@ -49,15 +54,14 @@ void pad_image(matrix* img, matrix* padded_img, int padding_size, u_int8_t fill_
     }
 
     #pragma omp single
-    {
-        free_matrix(img);
-        img->rows = new_rows;
-        img->cols = new_cols;
-        img->data = padded_img->data;
-    }
+        move_matrix_data(img, padded_img);
 }
 
 void paste_image(matrix* dest, matrix* src, int row_offset, int col_offset) {
+    if (dest->rows < src->rows + row_offset || dest->cols < src->cols + col_offset) {
+        fprintf(stderr, "Error: Source image does not fit within destination image at the specified offset.\n");
+        exit(EXIT_FAILURE);
+    }
     #pragma omp for
     for (int i = 0; i < src->rows; i++) {
         for (int j = 0; j < src->cols; j++) {
@@ -71,10 +75,13 @@ void build_mosaic_image(matrix* dest, matrix* tile_buffer, const char** tile_pat
     int tile_rows = tile_buffer->rows;
     int tile_cols = tile_buffer->cols;
 
-    allocate_matrix(dest, tile_rows * grid_rows, tile_cols * grid_cols);
-    paste_image(dest, tile_buffer, 0, 0);
     #pragma omp single
-    free_matrix(tile_buffer);
+        allocate_matrix(dest, tile_rows * grid_rows, tile_cols * grid_cols);
+
+    paste_image(dest, tile_buffer, 0, 0);
+
+    #pragma omp single
+        free_matrix(tile_buffer);
 
     for (int t = 1; t < grid_rows * grid_cols; t++) {
         int gi = t / grid_cols;
@@ -82,14 +89,16 @@ void build_mosaic_image(matrix* dest, matrix* tile_buffer, const char** tile_pat
         load_image(tile_paths[t], tile_buffer);
         paste_image(dest, tile_buffer, gi * tile_rows, gj * tile_cols);
         #pragma omp single
-        free_matrix(tile_buffer);
+            free_matrix(tile_buffer);
     }
 }
 
 void crop_image(matrix* img, matrix* cropped_img, int crop_size) {
     int new_rows = img->rows - 2 * crop_size;
     int new_cols = img->cols - 2 * crop_size;
-    allocate_matrix(cropped_img, new_rows, new_cols);
+
+    #pragma omp single
+        allocate_matrix(cropped_img, new_rows, new_cols);
 
     #pragma omp for collapse(2)
     for (int i = 0; i < new_rows; i++) {
@@ -99,10 +108,5 @@ void crop_image(matrix* img, matrix* cropped_img, int crop_size) {
     }
     
     #pragma omp single
-    {
-        free_matrix(img);
-        img->rows = new_rows;
-        img->cols = new_cols;
-        img->data = cropped_img->data;
-    }
+        move_matrix_data(img, cropped_img);
 }
