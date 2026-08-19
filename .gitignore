@@ -6,4 +6,7 @@ OpenMP/main
 OpenMP/output
 experiment_run
 OpenMP/analysis
+CUDA/build
+CUDA/main
+CUDA/output
 OpenMP/tests
