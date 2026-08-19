@@ -7,7 +7,9 @@
 #define RESULTS_DIR "experiment_run"
 #define RESULTS_FILE RESULTS_DIR "/results.csv"
 
-void log_timings_csv(const char* run_id, timing_sample* samples, int count, int threads, int image_rows, int image_cols) {
+void log_timings_csv(const char* run_id, const char* implementation,
+                     timing_sample* samples, int count,
+                     int threads, int se_size, int image_rows, int image_cols) {
     mkdir(RESULTS_DIR, 0755);
 
     struct stat st;
@@ -20,14 +22,17 @@ void log_timings_csv(const char* run_id, timing_sample* samples, int count, int 
     }
 
     if (!file_exists) {
-        fprintf(f, "run_id,threads,image_rows,image_cols,operation,run_index,seconds,vectorized\n");
+        fprintf(f, "run_id,implementation,threads,se_size,image_rows,image_cols,operation,run_index,seconds\n");
     }
 
     for (int i = 0; i < count; i++) {
-        fprintf(f, "%s,%d,%d,%d,%s,%d,%.6f,%d\n", run_id, threads, image_rows, image_cols,
-                samples[i].operation, samples[i].run_index, samples[i].seconds, samples[i].vectorized);
+        fprintf(f, "%s,%s,%d,%d,%d,%d,%s,%d,%.6f\n", run_id, implementation, threads,
+                se_size, image_rows, image_cols, samples[i].operation, samples[i].run_index,
+                samples[i].seconds);
     }
 
     fclose(f);
-    printf("Timing results appended to %s (run=%s, threads=%d, image=%dx%d, samples=%d)\n", RESULTS_FILE, run_id, threads, image_rows, image_cols, count);
+    printf("  -> %d campioni in %s (impl=%s, threads=%d, se=%dx%d, image=%dx%d)\n",
+           count, RESULTS_FILE, implementation, threads, se_size, se_size,
+           image_rows, image_cols);
 }

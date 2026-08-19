@@ -7,80 +7,20 @@
 #include "matrix.h"
 #include "image.h"
 #include "morphologies.h"
+#include "sequential.h"
 #include "logger.h"
 
-#define SE_SIZE 5
-#define DATASET_DIR "../brain-cancer-mri-dataset/Brain_Cancer raw MRI data/Brain_Cancer/"
-#define WARMUP_RUNS 5
-#define TIMED_RUNS 40
-#define MAX_MOSAIC_TILES 64
+#define DATASET_DIR "../brain-cancer-mri-dataset/Brain_Cancer raw MRI data/Brain_Cancer"
+#define WARMUP_RUNS 2
+#define TIMED_RUNS 10
+#define PIPELINE_BATCH 8
 
-static const char* MOSAIC_TILES[MAX_MOSAIC_TILES] = {
-    DATASET_DIR "brain_menin/brain_menin_0001.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0001.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0001.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0002.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0002.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0002.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0003.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0003.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0003.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0004.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0004.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0004.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0005.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0005.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0005.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0006.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0006.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0006.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0007.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0007.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0007.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0008.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0008.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0008.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0009.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0009.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0009.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0010.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0010.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0010.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0011.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0011.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0011.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0012.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0012.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0012.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0013.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0013.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0013.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0014.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0014.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0014.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0015.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0015.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0015.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0016.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0016.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0016.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0017.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0017.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0017.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0018.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0018.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0018.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0019.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0019.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0019.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0020.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0020.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0020.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0021.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0021.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0021.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0022.jpg"
-};
+// Dimensioni dell'elemento strutturante. Il costo per pixel cresce col numero
+// di celle (9, 25, 81), quindi questo asse varia l'intensita' aritmetica del
+// kernel a parita' di traffico di memoria: utile per capire quanto le
+// operazioni siano memory-bound o compute-bound.
+static const int TEST_SE_SIZES[] = {3, 5, 9};
+#define NUM_SE_SIZES (int)(sizeof(TEST_SE_SIZES) / sizeof(TEST_SE_SIZES[0]))
 
 typedef struct {
     int rows;
@@ -95,29 +35,37 @@ static const grid_size TEST_GRID_SIZES[] = {
 };
 #define NUM_TEST_SIZES (int)(sizeof(TEST_GRID_SIZES) / sizeof(TEST_GRID_SIZES[0]))
 
-static const int TEST_THREAD_COUNTS[] = {1, 2, 4, 6, 8, 10};
+static const int TEST_THREAD_COUNTS[] = {1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20};
 #define NUM_THREAD_COUNTS (int)(sizeof(TEST_THREAD_COUNTS) / sizeof(TEST_THREAD_COUNTS[0]))
 
 #define MAX_SAMPLES (4 * TIMED_RUNS)
 static timing_sample run_samples[MAX_SAMPLES];
 static int sample_count = 0;
 
-typedef void (*morph_op)(matrix*, matrix*, matrix*, int);
+// source: mosaici intatti, ricostruiti ad ogni dimensione.
+// working: copie di lavoro, rigenerate prima di ogni run (le operazioni
+//          modificano l'immagine in place).
+static matrix  source[PIPELINE_BATCH];
+static matrix  working[PIPELINE_BATCH];
+static matrix* batch[PIPELINE_BATCH];
 
-static void benchmark_operation(morph_op op, const char* label, matrix* input, matrix* working, matrix* se, matrix* scratch, int vectorization) {
+typedef void (*morph_op)(matrix**, matrix*, matrix*, int);
+
+static void benchmark_parallel(morph_op op, const char* label, matrix* se, matrix* scratch,
+                               int batch_size) {
     for (int r = 0; r < WARMUP_RUNS; r++) {
-        copy_matrix(input, working);
-        op(working, se, scratch, vectorization);
+        for (int k = 0; k < batch_size; k++) copy_matrix(&source[k], &working[k]);
+        op(batch, se, scratch, batch_size);
     }
 
     double sum = 0.0, min = DBL_MAX;
     for (int r = 0; r < TIMED_RUNS; r++) {
-        copy_matrix(input, working);
-        op(working, se, scratch, vectorization);
+        for (int k = 0; k < batch_size; k++) copy_matrix(&source[k], &working[k]);
+        op(batch, se, scratch, batch_size);
         #pragma omp master
         {
             double d = last_op_seconds;
-            run_samples[sample_count++] = (timing_sample){label, r, d, vectorization};
+            run_samples[sample_count++] = (timing_sample){label, r, d};
             sum += d;
             if (d < min) min = d;
         }
@@ -125,96 +73,160 @@ static void benchmark_operation(morph_op op, const char* label, matrix* input, m
 
     #pragma omp master
     {
-        printf("%s (vectorized=%d): mean=%.4f s, min=%.4f s (%d warmup + %d timed runs)\n", label, vectorization, sum / TIMED_RUNS, min, WARMUP_RUNS, TIMED_RUNS);
+        printf("  %-9s mean=%.5f s  min=%.5f s  (per immagine)\n",
+               label, sum / TIMED_RUNS, min);
     }
 }
 
-int main() {
+typedef void (*seq_batch_op)(matrix**, matrix*, int);
+
+static void record_sample(const char* label, int run_index, double seconds,
+                          double* sum, double* min) {
+    run_samples[sample_count++] = (timing_sample){label, run_index, seconds};
+    *sum += seconds;
+    if (seconds < *min) *min = seconds;
+}
+
+static void report(const char* label, double sum, double min) {
+    printf("  %-9s mean=%.5f s  min=%.5f s  (per immagine)\n", label, sum / TIMED_RUNS, min);
+}
+
+// clock: puntatore alla variabile di timing della variante in uso
+// (last_seq_seconds_scalar oppure last_seq_seconds_simd).
+static void benchmark_seq_batch(seq_batch_op op, const char* label, matrix* se,
+                                const double* clock) {
+    for (int r = 0; r < WARMUP_RUNS; r++) {
+        for (int k = 0; k < PIPELINE_BATCH; k++) copy_matrix_serial(&source[k], &working[k]);
+        op(batch, se, PIPELINE_BATCH);
+    }
+
+    double sum = 0.0, min = DBL_MAX;
+    for (int r = 0; r < TIMED_RUNS; r++) {
+        for (int k = 0; k < PIPELINE_BATCH; k++) copy_matrix_serial(&source[k], &working[k]);
+        op(batch, se, PIPELINE_BATCH);
+        record_sample(label, r, *clock, &sum, &min);
+    }
+    report(label, sum, min);
+}
+
+// Esegue le 4 operazioni per una delle due varianti sequenziali e logga il blocco.
+static void run_sequential_baseline(const char* impl_name, const char* run_id, matrix* se,
+                                    seq_batch_op erosion, seq_batch_op dilation,
+                                    seq_batch_op opening, seq_batch_op closing,
+                                    const double* clock) {
+    printf("\n--- %s ---\n", impl_name);
+    sample_count = 0;
+    benchmark_seq_batch(erosion,  "erosion",  se, clock);
+    benchmark_seq_batch(dilation, "dilation", se, clock);
+    benchmark_seq_batch(opening,  "opening",  se, clock);
+    benchmark_seq_batch(closing,  "closing",  se, clock);
+    log_timings_csv(run_id, impl_name, run_samples, sample_count, 1,
+                    se->rows, source[0].rows, source[0].cols);
+}
+
+int main(void) {
     char run_id[32];
     time_t now = time(NULL);
     struct tm tm_info;
     localtime_r(&now, &tm_info);
     strftime(run_id, sizeof(run_id), "%Y-%m-%d %H:%M:%S", &tm_info);
 
-    matrix input_image;
-    matrix structuring_element;
+    char** tiles = NULL;
+    int ntiles = scan_dataset(DATASET_DIR, &tiles);
+    if (ntiles <= 0) {
+        fprintf(stderr, "Nessuna immagine trovata in %s\n", DATASET_DIR);
+        return EXIT_FAILURE;
+    }
+    printf("Dataset: %d tile trovati\n", ntiles);
 
-    structuring_element.rows = SE_SIZE;
-    structuring_element.cols = SE_SIZE;
+    int max_tiles_needed = TEST_GRID_SIZES[NUM_TEST_SIZES-1].rows *
+                           TEST_GRID_SIZES[NUM_TEST_SIZES-1].cols * PIPELINE_BATCH;
+    if (max_tiles_needed > ntiles) {
+        fprintf(stderr, "Servono %d tile (griglia piu' grande x batch %d) ma ne sono disponibili %d\n",
+                max_tiles_needed, PIPELINE_BATCH, ntiles);
+        free_dataset(tiles, ntiles);
+        return EXIT_FAILURE;
+    }
 
-    matrix eroded_image;
-    matrix dilated_image;
-    matrix opened_image;
-    matrix closed_image;
+    matrix structuring_element = {0};
+    matrix scratch     = {0};
+    matrix tile_buffer = {0};
 
-    matrix scratch;
-    matrix tile_buffer;
+    for (int k = 0; k < PIPELINE_BATCH; k++) {
+        source[k]  = (matrix){0};
+        working[k] = (matrix){0};
+        batch[k]   = &working[k];
+    }
 
-    for (int t = 0; t < NUM_THREAD_COUNTS; t++) {
-        int num_threads = TEST_THREAD_COUNTS[t];
+    for (int s = 0; s < NUM_TEST_SIZES; s++) {
+        int grid_rows  = TEST_GRID_SIZES[s].rows;
+        int grid_cols  = TEST_GRID_SIZES[s].cols;
+        int per_mosaic = grid_rows * grid_cols;
 
-        #pragma omp parallel num_threads(num_threads)
-        {
-            #pragma omp single
-            {
-                printf("\n=== Running with %d threads ===\n", num_threads);
-            }
+        // Ogni elemento del batch e' un mosaico distinto, costruito da tile
+        // diversi: fetta [k*per_mosaic, (k+1)*per_mosaic) del dataset.
+        for (int k = 0; k < PIPELINE_BATCH; k++) {
+            build_mosaic_image(&source[k], &tile_buffer,
+                               (const char**)&tiles[k * per_mosaic],
+                               grid_rows, grid_cols);
+        }
 
-            allocate_matrix(&structuring_element, structuring_element.rows, structuring_element.cols);
-            #pragma omp for
-            for (int i = 0; i < structuring_element.rows; i++) {
-                for (int j = 0; j < structuring_element.cols; j++) {
+        printf("\n########## Immagine %d x %d (griglia %dx%d, batch di %d) ##########\n",
+               source[0].rows, source[0].cols, grid_rows, grid_cols, PIPELINE_BATCH);
+
+        for (int e = 0; e < NUM_SE_SIZES; e++) {
+            int se_size = TEST_SE_SIZES[e];
+
+            free_matrix(&structuring_element);
+            allocate_matrix(&structuring_element, se_size, se_size);
+            for (int i = 0; i < se_size; i++)
+                for (int j = 0; j < se_size; j++)
                     structuring_element.data[i][j] = 1;
-                }
-            }
 
-            #pragma omp single
-            {
-            printf("Structuring Element:\n");
-            }
+            printf("\n===== Elemento strutturante %dx%d (%d celle) =====\n",
+                   se_size, se_size, se_size * se_size);
 
-            print_matrix(&structuring_element);
+            run_sequential_baseline("sequential_scalar", run_id, &structuring_element,
+                                    seq_erosion_scalar, seq_dilation_scalar,
+                                    seq_opening_scalar, seq_closing_scalar,
+                                    &last_seq_seconds_scalar);
 
-            for (int s = 0; s < NUM_TEST_SIZES; s++) {
-                int grid_rows = TEST_GRID_SIZES[s].rows;
-                int grid_cols = TEST_GRID_SIZES[s].cols;
+            run_sequential_baseline("sequential_simd", run_id, &structuring_element,
+                                    seq_erosion_simd, seq_dilation_simd,
+                                    seq_opening_simd, seq_closing_simd,
+                                    &last_seq_seconds_simd);
 
-                build_mosaic_image(&input_image, &tile_buffer, MOSAIC_TILES, grid_rows, grid_cols);
+            for (int t = 0; t < NUM_THREAD_COUNTS; t++) {
+                int num_threads = TEST_THREAD_COUNTS[t];
+                printf("\n--- parallelo, %d thread ---\n", num_threads);
 
-                #pragma omp single
+                #pragma omp parallel num_threads(num_threads)
                 {
-                    printf("Input Image (%dx%d tiles): %d x %d\n", grid_rows, grid_cols, input_image.rows, input_image.cols);
-                }
-
-                for (int v = 1; v >= 0; v--) {
                     #pragma omp single
                     sample_count = 0;
 
-                    benchmark_operation(image_erosion, "erosion", &input_image, &eroded_image, &structuring_element, &scratch, v);
-                    benchmark_operation(image_dilation, "dilation", &input_image, &dilated_image, &structuring_element, &scratch, v);
-                    benchmark_operation(image_opening, "opening", &input_image, &opened_image, &structuring_element, &scratch, v);
-                    benchmark_operation(image_closing, "closing", &input_image, &closed_image, &structuring_element, &scratch, v);
+                    benchmark_parallel(image_erosion,  "erosion",  &structuring_element, &scratch, PIPELINE_BATCH);
+                    benchmark_parallel(image_dilation, "dilation", &structuring_element, &scratch, PIPELINE_BATCH);
+                    benchmark_parallel(image_opening,  "opening",  &structuring_element, &scratch, PIPELINE_BATCH);
+                    benchmark_parallel(image_closing,  "closing",  &structuring_element, &scratch, PIPELINE_BATCH);
 
                     #pragma omp single
-                    log_timings_csv(run_id, run_samples, sample_count, num_threads, input_image.rows, input_image.cols);
+                    log_timings_csv(run_id, "parallel", run_samples, sample_count, num_threads,
+                                    se_size, source[0].rows, source[0].cols);
                 }
-
-                #pragma omp master
-                {
-                    free_matrix(&input_image);
-                    free_matrix(&eroded_image);
-                    free_matrix(&dilated_image);
-                    free_matrix(&opened_image);
-                    free_matrix(&closed_image);
-                }
-            }
-
-            #pragma omp master
-            {
-                printf("Freeing allocated memory...\n");
-                free_matrix(&structuring_element);
             }
         }
+
+        for (int k = 0; k < PIPELINE_BATCH; k++) {
+            free_matrix(&source[k]);
+            free_matrix(&working[k]);
+        }
     }
+
+    printf("\nFreeing allocated memory...\n");
+    free_matrix(&structuring_element);
+    free_matrix(&scratch);
+    free_matrix(&tile_buffer);
+    free_dataset(tiles, ntiles);
     return 0;
 }
