@@ -1,7 +1,7 @@
 # Parallel Computing — Esame
 
 Benchmark di operazioni di morfologia matematica su immagini in scala di grigi
-(erosione, dilatazione, opening, closing), applicate a mosaici composti da
+(erosione, dilatazione, opening), applicate a mosaici composti da
 immagini del [Brain Cancer MRI dataset](brain-cancer-mri-dataset/), parallelizzate
 con OpenMP e misurate al variare del numero di thread e della dimensione
 dell'immagine di input.
@@ -37,16 +37,16 @@ Esame/
    fetta diversa del dataset, per un totale di `righe × colonne × PIPELINE_BATCH`
    tile per configurazione.
 
-3. Ogni operazione morfologica (`image_erosion`, `image_dilation` in
+3. Ogni operazione morfologica (`image_erosion`, `image_dilation`) in
    [morphologies.c] segue lo schema classico "pad → sliding window sulla struttura → crop": l'immagine viene prima
    espansa (`pad_image`) di metà lato dell'elemento strutturante, poi si scorre
    una finestra calcolando min (erosione) o max (dilatazione)
    dei pixel coperti dall'elemento strutturante, infine si ritaglia (`crop_image`)
    il bordo aggiunto dal padding.
 
-4. `image_opening` = erosione poi dilatazione; `image_closing` = dilatazione poi
-   erosione. Non sono però una semplice composizione sequenziale delle due
-   primitive: sono realizzate come **pipeline software a due stadi** (sotto).
+4. `image_opening` = erosione poi dilatazione. Non è però una semplice
+   composizione sequenziale delle due primitive: è realizzata come **pipeline
+   a due stadi**.
 
 ### Parallelizzazione OpenMP — erosione e dilatazione
 
@@ -57,30 +57,27 @@ gira dentro un'unica regione `#pragma omp parallel`, distribuita con
 o `#pragma omp master` per essere eseguite da un solo thread, sfruttando le
 barriere implicite di questi costrutti per la sincronizzazione fra le fasi.
 
-### Pipeline software — opening e closing
+### Pipeline — opening
 
 Eseguire i due stadi in sequenza sull'intero batch lascia il team in gran parte
-fermo durante le fasi seriali (allocazioni, `single`) di ogni immagine. Le
-operazioni composte usano invece una **pipeline a due stadi**.
+fermo durante le fasi seriali (allocazioni, `single`) di ogni immagine.
+L'opening usa invece una **pipeline a due stadi**.
 
 Lo split è **manuale**, via `omp_get_thread_num()`, non con `#pragma omp task`:
 un task è eseguito da un singolo thread, quindi per assegnarne `N/2` a uno
-stadio servirebbe parallelismo annidato — respawn di team che è un'operazione costosa.
+stadio servirebbe parallelismo annidato che comporta il respawn del team che è un'operazione costosa.
 Il partizionamento manuale riusa il team già aperto.
 
 Ne discende un vincolo preciso: `#pragma omp for`, `single` e `master` sono
-costrutti di worksharing che **richiedono l'intero team**, quindi non possono
-comparire nel codice eseguito da una sola metà (sarebbe una violazione della
-specifica e in pratica un deadlock). Per questo:
+costrutti di worksharing che **richiedono l'intero team**. Per questo:
 
-- gli helper di calcolo della pipeline (`erosion_rows`/`dilation_rows` in
+- gli helper di calcolo della pipeline (`erosion_helper`/`dilation_helper` in
   [morphologies.c](OpenMP/src/morphologies.c)) non contengono alcun costrutto di
   worksharing: il proprio intervallo di righe lo ricavano da `row_range()`;
 - `pad_image` e `crop_image` restano invece **in contesto team completo**, fuori
   dallo split, dove i loro `single`/`for` sono perfettamente leciti. È quindi
   sovrapposta la sola fase di calcolo — che è anche quella dominante, dato che
-  con un elemento strutturante 5×5 sono 25 letture per pixel di output contro
-  una singola copia del padding.
+  con un elemento strutturante 5×5 sono 25 letture per pixel di output.
 
 Ogni immagine avanza *in place* (grezza → stadio 1 → stadio 2) e i due stadi
 usano buffer distinti, così le due metà non si sovrappongono mai sulla stessa
@@ -135,9 +132,8 @@ confronto fra i due baseline.
 
 > **"C puro senza pragma" non significa scalare.** Clang a `-O2`
 > auto-vettorizza comunque: sulla macchina di test lo stesso sorgente sequenziale,
-> privo di qualsiasi direttiva, è già ~3,5× più veloce della propria compilazione
-> con `-fno-vectorize`. Per avere codice davvero scalare serve il flag esplicito —
-> che è poi il confronto *with/without vectorization flags* previsto dalla traccia.
+> privo di qualsiasi direttiva, è già più veloce della propria compilazione
+> con `-fno-vectorize`. Per avere codice davvero scalare serve il flag esplicito.
 
 #### Parametri
 
@@ -153,7 +149,7 @@ confronto fra i due baseline.
 Il tetto di 20 thread è 2× i core fisici della macchina di test, così da coprire
 anche la regione di oversubscription.
 
-L'elemento strutturante varia l'**intensità aritmetica** del kernel: 9, 25 o 81
+L'elemento strutturante varia il **carico aritmetico** del kernel: 9, 25 o 81
 letture per pixel di output a parità di traffico di memoria. È l'asse che sposta
 l'operazione da memory-bound verso compute-bound, e infatti lo scaling migliora
 in modo monotono al crescere dell'SE — su `opening` a 512², lo speedup da
@@ -161,17 +157,15 @@ threading passa da 1,3× (SE 3×3) a 2,9× (SE 9×9).
 
 #### Cosa viene cronometrato
 
-Tutte e quattro le operazioni misurano la **stessa cosa**: il wall-clock
+Tutte e tre le operazioni misurano la **stessa cosa**: il wall-clock
 dell'intero batch, padding e cropping inclusi, diviso per il numero di immagini.
 I tempi sono quindi un valore per-immagine e sono direttamente confrontabili fra
 loro.
 
 Cronometrare il batch anziché la singola immagine serve anche alla qualità della
-misura: pag. 37 raccomanda intervalli sufficientemente lunghi, e misurare 8
-immagini per volta riduce di circa 3× il peso relativo del rumore di scheduling.
-Resta comunque sotto la soglia dei 10 s indicata (circa 5 s nella configurazione
-più pesante, 4096² con SE 9×9): la stabilità è recuperata per via statistica,
-mediando su `TIMED_RUNS` misure di cui il CSV conserva ogni singolo campione.
+misura: misurare 8nimmagini per volta riducen il peso relativo del rumore di scheduling.
+La stabilità è recuperata per via statistica,mediando su `TIMED_RUNS`
+misure di cui il CSV conserva ogni singolo campione.
 
 #### Scelta dello scheduling
 
@@ -189,11 +183,11 @@ Le politiche sono state confrontate sperimentalmente sul loop centrale
 
 `guided` è la scelta adottata: vince fino a 16 thread — con circa **10% di
 vantaggio su `static` a 10 thread** — e resta vicino al migliore altrove. La
-ragione è la topologia eterogenea della CPU: con `static` i 4 efficiency core
+ragione è la topologia eterogenea della CPU di test: con `static` i 4 efficiency core
 ricevono lo stesso numero di righe dei 6 performance core e diventano i
 ritardatari su cui l'intero team si sincronizza alla barriera, mentre `guided`
 assegna blocchi via via più piccoli e assorbe lo sbilanciamento. `dynamic,16`
-prevale solo in oversubscription (20 thread), dove il costo di sincronizzazione
+prevale solo con 20 thread, dove il costo di sincronizzazione
 per blocco pesa meno dello sbilanciamento residuo.
 
 I `for` di copia in `pad_image`/`crop_image`/`copy_matrix` mantengono lo
@@ -212,23 +206,13 @@ prodotte nella stessa esecuzione. `implementation` vale `sequential_scalar`,
 `sequential_simd` (entrambi baseline, sempre con `threads=1`) o `parallel`, ed è
 la colonna su cui si costruisce la decomposizione dello speedup.
 
-[analysis/analyze_results.py](OpenMP/analysis/analyze_results.py) legge il CSV e
-produce statistiche (media, deviazione standard, min, max) e i grafici di tempo,
-speedup — separato in componente da vettorizzazione e da threading — ed
-efficienza parallela.
-
 ## Validazione della correttezza
 
 La versione parallela è verificata **pixel per pixel** contro il baseline
 sequenziale **scalare**, perché se i due coincidono
 allora né la vettorizzazione né il threading hanno alterato l'immagine. Il
-confronto copre tutte e quattro le operazioni, 3 dimensioni di elemento
-strutturante (3×3, 5×5, 9×9) e 6 configurazioni di thread, per 72 configurazioni totali:
-
-```sh
-cd OpenMP
-make test
-```
+confronto copre tutte e tre le operazioni, 3 dimensioni di elemento
+strutturante (3×3, 5×5, 9×9) e 6 configurazioni di thread, per 54 configurazioni totali.
 
 ## Ambiente di test
 
@@ -240,17 +224,11 @@ make test
 | Compilatore | Apple clang 21.0.0, `-O2 -Xclang -fopenmp` |
 | Runtime OpenMP | LLVM libomp 22.1.8 (Homebrew) |
 
-La topologia eterogenea P-core/E-core è rilevante per l'interpretazione: oltre i
-6 thread entrano in gioco gli efficiency core, che con `schedule(static)`
-ricevono lo stesso numero di righe dei performance core e diventano i ritardatari
-su cui il team si sincronizza.
-
 ## Dataset
 
 [Brain Cancer MRI dataset](https://www.kaggle.com/datasets/orvile/brain-cancer-mri-dataset)
 — 6056 immagini JPEG 512×512 in scala di grigi, tre classi (`brain_glioma`,
-`brain_menin`, `brain_tumor`). I tile vengono enumerati a runtime e composti in
-mosaici; nessun preprocessing è applicato oltre alla conversione a singolo canale
+`brain_menin`, `brain_tumor`). Nessun preprocessing è applicato oltre alla conversione a singolo canale
 fatta da `stb_image` in fase di caricamento, che resta fuori dalle misure.
 
 ## Come eseguire

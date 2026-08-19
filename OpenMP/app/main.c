@@ -38,7 +38,7 @@ static const grid_size TEST_GRID_SIZES[] = {
 static const int TEST_THREAD_COUNTS[] = {1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20};
 #define NUM_THREAD_COUNTS (int)(sizeof(TEST_THREAD_COUNTS) / sizeof(TEST_THREAD_COUNTS[0]))
 
-#define MAX_SAMPLES (4 * TIMED_RUNS)
+#define MAX_SAMPLES (3 * TIMED_RUNS)
 static timing_sample run_samples[MAX_SAMPLES];
 static int sample_count = 0;
 
@@ -112,14 +112,13 @@ static void benchmark_seq_batch(seq_batch_op op, const char* label, matrix* se,
 // Esegue le 4 operazioni per una delle due varianti sequenziali e logga il blocco.
 static void run_sequential_baseline(const char* impl_name, const char* run_id, matrix* se,
                                     seq_batch_op erosion, seq_batch_op dilation,
-                                    seq_batch_op opening, seq_batch_op closing,
+                                    seq_batch_op opening,
                                     const double* clock) {
     printf("\n--- %s ---\n", impl_name);
     sample_count = 0;
     benchmark_seq_batch(erosion,  "erosion",  se, clock);
     benchmark_seq_batch(dilation, "dilation", se, clock);
     benchmark_seq_batch(opening,  "opening",  se, clock);
-    benchmark_seq_batch(closing,  "closing",  se, clock);
     log_timings_csv(run_id, impl_name, run_samples, sample_count, 1,
                     se->rows, source[0].rows, source[0].cols);
 }
@@ -188,12 +187,12 @@ int main(void) {
 
             run_sequential_baseline("sequential_scalar", run_id, &structuring_element,
                                     seq_erosion_scalar, seq_dilation_scalar,
-                                    seq_opening_scalar, seq_closing_scalar,
+                                    seq_opening_scalar,
                                     &last_seq_seconds_scalar);
 
             run_sequential_baseline("sequential_simd", run_id, &structuring_element,
                                     seq_erosion_simd, seq_dilation_simd,
-                                    seq_opening_simd, seq_closing_simd,
+                                    seq_opening_simd,
                                     &last_seq_seconds_simd);
 
             for (int t = 0; t < NUM_THREAD_COUNTS; t++) {
@@ -208,7 +207,6 @@ int main(void) {
                     benchmark_parallel(image_erosion,  "erosion",  &structuring_element, &scratch, PIPELINE_BATCH);
                     benchmark_parallel(image_dilation, "dilation", &structuring_element, &scratch, PIPELINE_BATCH);
                     benchmark_parallel(image_opening,  "opening",  &structuring_element, &scratch, PIPELINE_BATCH);
-                    benchmark_parallel(image_closing,  "closing",  &structuring_element, &scratch, PIPELINE_BATCH);
 
                     #pragma omp single
                     log_timings_csv(run_id, "parallel", run_samples, sample_count, num_threads,

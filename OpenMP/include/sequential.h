@@ -29,11 +29,9 @@ extern double last_seq_seconds_simd;
 void seq_erosion_scalar(matrix** img, matrix* structuring_element, int size);
 void seq_dilation_scalar(matrix** img, matrix* structuring_element, int size);
 void seq_opening_scalar(matrix** img, matrix* structuring_element, int size);
-void seq_closing_scalar(matrix** img, matrix* structuring_element, int size);
 
 void seq_erosion_simd(matrix** img, matrix* structuring_element, int size);
 void seq_dilation_simd(matrix** img, matrix* structuring_element, int size);
 void seq_opening_simd(matrix** img, matrix* structuring_element, int size);
-void seq_closing_simd(matrix** img, matrix* structuring_element, int size);
 
 #endif

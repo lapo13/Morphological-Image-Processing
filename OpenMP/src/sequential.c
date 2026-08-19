@@ -162,12 +162,3 @@ void SEQ(seq_opening)(matrix** img, matrix* structuring_element, int size) {
     }
     SEQ(last_seq_seconds) = (now_seconds() - t0) / size;
 }
-
-void SEQ(seq_closing)(matrix** img, matrix* structuring_element, int size) {
-    double t0 = now_seconds();
-    for (int k = 0; k < size; k++) {
-        run_stage(img[k], structuring_element, 0,   dilation_kernel);
-        run_stage(img[k], structuring_element, 255, erosion_kernel);
-    }
-    SEQ(last_seq_seconds) = (now_seconds() - t0) / size;
-}
