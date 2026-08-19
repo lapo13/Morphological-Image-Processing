@@ -21,7 +21,7 @@ void free_matrix(matrix* matrix) {
     }
 }
 
-static void move_matrix_data(matrix *dst, matrix *src)
+void move_matrix_data(matrix *dst, matrix *src)
 {
     free_matrix(dst);
 
@@ -49,8 +49,15 @@ void allocate_matrix(matrix* matrix, int rows, int cols) {
     }
 }
 
+// NB: dest deve essere una matrice valida (data == NULL se mai allocata):
+// il buffer eventualmente gia' presente viene liberato prima di riallocare.
 void copy_matrix(matrix* src, matrix* dest) {
-    allocate_matrix(dest, src->rows, src->cols);
+    #pragma omp single
+    {
+        free_matrix(dest);
+        allocate_matrix(dest, src->rows, src->cols);
+    }
+
     #pragma omp for collapse(2)
     for (int i = 0; i < src->rows; i++) {
         for (int j = 0; j < src->cols; j++) {
