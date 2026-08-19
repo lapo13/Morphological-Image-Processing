@@ -49,6 +49,12 @@ void allocate_matrix(matrix* matrix, int rows, int cols) {
     }
 }
 
+void copy_matrix_serial(matrix* src, matrix* dest) {
+    free_matrix(dest);
+    allocate_matrix(dest, src->rows, src->cols);
+    memcpy(dest->data[0], src->data[0], (size_t)src->rows * src->cols);
+}
+
 // NB: dest deve essere una matrice valida (data == NULL se mai allocata):
 // il buffer eventualmente gia' presente viene liberato prima di riallocare.
 void copy_matrix(matrix* src, matrix* dest) {
