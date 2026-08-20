@@ -13,7 +13,15 @@
 #define DATASET_DIR "../brain-cancer-mri-dataset/Brain_Cancer raw MRI data/Brain_Cancer"
 #define WARMUP_RUNS 2
 #define TIMED_RUNS 10
-#define PIPELINE_BATCH 8
+#define PIPELINE_BATCH 16
+
+// Weak scaling (legge di Gustafson-Barsis): il carico cresce con i thread, cosi'
+// il lavoro per thread resta costante. Si scalano le RIGHE del mosaico, che sono
+// l'asse su cui il loop parallelo distribuisce le iterazioni: a p thread il
+// mosaico ha p righe di tile. Il batch resta fisso, altrimenti cambierebbe anche
+// la profondita' della pipeline e i due effetti sarebbero indistinguibili.
+#define WEAK_COLS  2
+#define WEAK_BATCH 8
 
 // Dimensioni dell'elemento strutturante. Il costo per pixel cresce col numero
 // di celle (9, 25, 81), quindi questo asse varia l'intensita' aritmetica del
@@ -35,10 +43,10 @@ static const grid_size TEST_GRID_SIZES[] = {
 };
 #define NUM_TEST_SIZES (int)(sizeof(TEST_GRID_SIZES) / sizeof(TEST_GRID_SIZES[0]))
 
-static const int TEST_THREAD_COUNTS[] = {1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20};
+static const int TEST_THREAD_COUNTS[] = {2, 4, 6, 8, 10, 12, 14, 16, 18, 20};
 #define NUM_THREAD_COUNTS (int)(sizeof(TEST_THREAD_COUNTS) / sizeof(TEST_THREAD_COUNTS[0]))
 
-#define MAX_SAMPLES (3 * TIMED_RUNS)
+#define MAX_SAMPLES (2 * TIMED_RUNS)
 static timing_sample run_samples[MAX_SAMPLES];
 static int sample_count = 0;
 
@@ -94,32 +102,30 @@ static void report(const char* label, double sum, double min) {
 // clock: puntatore alla variabile di timing della variante in uso
 // (last_seq_seconds_scalar oppure last_seq_seconds_simd).
 static void benchmark_seq_batch(seq_batch_op op, const char* label, matrix* se,
-                                const double* clock) {
+                                const double* clock, int batch_size) {
     for (int r = 0; r < WARMUP_RUNS; r++) {
-        for (int k = 0; k < PIPELINE_BATCH; k++) copy_matrix_serial(&source[k], &working[k]);
-        op(batch, se, PIPELINE_BATCH);
+        for (int k = 0; k < batch_size; k++) copy_matrix_serial(&source[k], &working[k]);
+        op(batch, se, batch_size);
     }
 
     double sum = 0.0, min = DBL_MAX;
     for (int r = 0; r < TIMED_RUNS; r++) {
-        for (int k = 0; k < PIPELINE_BATCH; k++) copy_matrix_serial(&source[k], &working[k]);
-        op(batch, se, PIPELINE_BATCH);
+        for (int k = 0; k < batch_size; k++) copy_matrix_serial(&source[k], &working[k]);
+        op(batch, se, batch_size);
         record_sample(label, r, *clock, &sum, &min);
     }
     report(label, sum, min);
 }
 
-// Esegue le 4 operazioni per una delle due varianti sequenziali e logga il blocco.
+// Esegue le due operazioni per una delle varianti sequenziali e logga il blocco.
 static void run_sequential_baseline(const char* impl_name, const char* run_id, matrix* se,
-                                    seq_batch_op erosion, seq_batch_op dilation,
-                                    seq_batch_op opening,
+                                    seq_batch_op erosion, seq_batch_op opening,
                                     const double* clock) {
     printf("\n--- %s ---\n", impl_name);
     sample_count = 0;
-    benchmark_seq_batch(erosion,  "erosion",  se, clock);
-    benchmark_seq_batch(dilation, "dilation", se, clock);
-    benchmark_seq_batch(opening,  "opening",  se, clock);
-    log_timings_csv(run_id, impl_name, run_samples, sample_count, 1,
+    benchmark_seq_batch(erosion, "erosion", se, clock, PIPELINE_BATCH);
+    benchmark_seq_batch(opening, "opening", se, clock, PIPELINE_BATCH);
+    log_timings_csv(run_id, "strong", impl_name, run_samples, sample_count, 1,
                     se->rows, source[0].rows, source[0].cols);
 }
 
@@ -186,13 +192,11 @@ int main(void) {
                    se_size, se_size, se_size * se_size);
 
             run_sequential_baseline("sequential_scalar", run_id, &structuring_element,
-                                    seq_erosion_scalar, seq_dilation_scalar,
-                                    seq_opening_scalar,
+                                    seq_erosion_scalar, seq_opening_scalar,
                                     &last_seq_seconds_scalar);
 
             run_sequential_baseline("sequential_simd", run_id, &structuring_element,
-                                    seq_erosion_simd, seq_dilation_simd,
-                                    seq_opening_simd,
+                                    seq_erosion_simd, seq_opening_simd,
                                     &last_seq_seconds_simd);
 
             for (int t = 0; t < NUM_THREAD_COUNTS; t++) {
@@ -205,12 +209,11 @@ int main(void) {
                     sample_count = 0;
 
                     benchmark_parallel(image_erosion,  "erosion",  &structuring_element, &scratch, PIPELINE_BATCH);
-                    benchmark_parallel(image_dilation, "dilation", &structuring_element, &scratch, PIPELINE_BATCH);
                     benchmark_parallel(image_opening,  "opening",  &structuring_element, &scratch, PIPELINE_BATCH);
 
                     #pragma omp single
-                    log_timings_csv(run_id, "parallel", run_samples, sample_count, num_threads,
-                                    se_size, source[0].rows, source[0].cols);
+                    log_timings_csv(run_id, "strong", "parallel", run_samples, sample_count,
+                                    num_threads, se_size, source[0].rows, source[0].cols);
                 }
             }
         }
@@ -218,6 +221,81 @@ int main(void) {
         for (int k = 0; k < PIPELINE_BATCH; k++) {
             free_matrix(&source[k]);
             free_matrix(&working[k]);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Weak scaling: carico proporzionale ai thread (Gustafson-Barsis)
+    // ---------------------------------------------------------------------
+    printf("\n\n########## Weak scaling (righe del mosaico ∝ thread) ##########\n");
+
+    for (int e = 0; e < NUM_SE_SIZES; e++) {
+        int se_size = TEST_SE_SIZES[e];
+
+        free_matrix(&structuring_element);
+        allocate_matrix(&structuring_element, se_size, se_size);
+        for (int i = 0; i < se_size; i++)
+            for (int j = 0; j < se_size; j++)
+                structuring_element.data[i][j] = 1;
+
+        printf("\n===== Elemento strutturante %dx%d =====\n", se_size, se_size);
+
+        // Riferimento: carico base, una sola riga di tile, eseguito dal baseline
+        // sequenziale vettorizzato. E' il T(1) rispetto a cui si misura di quanto
+        // cresce il lavoro svolto a parita' di tempo.
+        for (int k = 0; k < WEAK_BATCH; k++)
+            build_mosaic_image(&source[k], &tile_buffer,
+                               (const char**)&tiles[k * WEAK_COLS], 1, WEAK_COLS);
+
+        printf("\n--- sequenziale, carico base (%dx%d) ---\n", source[0].rows, source[0].cols);
+        sample_count = 0;
+        benchmark_seq_batch(seq_erosion_simd, "erosion", &structuring_element,
+                            &last_seq_seconds_simd, WEAK_BATCH);
+        benchmark_seq_batch(seq_opening_simd, "opening", &structuring_element,
+                            &last_seq_seconds_simd, WEAK_BATCH);
+        log_timings_csv(run_id, "weak", "sequential_simd", run_samples, sample_count, 1,
+                        se_size, source[0].rows, source[0].cols);
+
+        for (int k = 0; k < WEAK_BATCH; k++) {
+            free_matrix(&source[k]);
+            free_matrix(&working[k]);
+        }
+
+        for (int t = 0; t < NUM_THREAD_COUNTS; t++) {
+            int num_threads = TEST_THREAD_COUNTS[t];
+
+            // Carico proporzionale: num_threads righe di tile invece di una.
+            int needed = num_threads * WEAK_COLS * WEAK_BATCH;
+            if (needed > ntiles) {
+                printf("\n--- %d thread: servirebbero %d tile, disponibili %d: saltato ---\n",
+                       num_threads, needed, ntiles);
+                continue;
+            }
+            for (int k = 0; k < WEAK_BATCH; k++)
+                build_mosaic_image(&source[k], &tile_buffer,
+                                   (const char**)&tiles[k * num_threads * WEAK_COLS],
+                                   num_threads, WEAK_COLS);
+
+            printf("\n--- parallelo, %d thread, carico %dx%d ---\n",
+                   num_threads, source[0].rows, source[0].cols);
+
+            #pragma omp parallel num_threads(num_threads)
+            {
+                #pragma omp single
+                sample_count = 0;
+
+                benchmark_parallel(image_erosion, "erosion", &structuring_element, &scratch, WEAK_BATCH);
+                benchmark_parallel(image_opening, "opening", &structuring_element, &scratch, WEAK_BATCH);
+
+                #pragma omp single
+                log_timings_csv(run_id, "weak", "parallel", run_samples, sample_count,
+                                num_threads, se_size, source[0].rows, source[0].cols);
+            }
+
+            for (int k = 0; k < WEAK_BATCH; k++) {
+                free_matrix(&source[k]);
+                free_matrix(&working[k]);
+            }
         }
     }
 

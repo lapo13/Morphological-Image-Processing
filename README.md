@@ -1,7 +1,7 @@
 # Parallel Computing — Esame
 
 Benchmark di operazioni di morfologia matematica su immagini in scala di grigi
-(erosione, dilatazione, opening), applicate a mosaici composti da
+(erosione e opening), applicate a mosaici composti da
 immagini del [Brain Cancer MRI dataset](brain-cancer-mri-dataset/), parallelizzate
 con OpenMP e misurate al variare del numero di thread e della dimensione
 dell'immagine di input.
@@ -37,8 +37,7 @@ Esame/
    fetta diversa del dataset, per un totale di `righe × colonne × PIPELINE_BATCH`
    tile per configurazione.
 
-3. Ogni operazione morfologica (`image_erosion`, `image_dilation`) in
-   [morphologies.c] segue lo schema classico "pad → sliding window sulla struttura → crop": l'immagine viene prima
+3. Ogni operazione morfologica segue lo schema classico "pad → sliding window sulla struttura → crop": l'immagine viene prima
    espansa (`pad_image`) di metà lato dell'elemento strutturante, poi si scorre
    una finestra calcolando min (erosione) o max (dilatazione)
    dei pixel coperti dall'elemento strutturante, infine si ritaglia (`crop_image`)
@@ -48,7 +47,13 @@ Esame/
    composizione sequenziale delle due primitive: è realizzata come **pipeline
    a due stadi**.
 
-### Parallelizzazione OpenMP — erosione e dilatazione
+Le operazioni **misurate** sono due, erosione e opening.
+La dilatazione resta nel codice, perché è il secondo stadio
+dell'opening, ma non viene cronometrata a sé: ha la stessa struttura di loop
+dell'erosione e ne segue l'andamento, quindi come
+misura non aggiungerebbe informazione.
+
+### Parallelizzazione OpenMP — erosione
 
 Tutto il lavoro (allocazione, caricamento tile, loop centrale delle operazioni)
 gira dentro un'unica regione `#pragma omp parallel`, distribuita con
@@ -68,14 +73,14 @@ un task è eseguito da un singolo thread, quindi per assegnarne `N/2` a uno
 stadio servirebbe parallelismo annidato che comporta il respawn del team che è un'operazione costosa.
 Il partizionamento manuale riusa il team già aperto.
 
-Ne discende un vincolo preciso: `#pragma omp for`, `single` e `master` sono
-costrutti di worksharing che **richiedono l'intero team**. Per questo:
+Da questa scelta deriva un vincolo: `#pragma omp for`, `single` e `master` sono
+costrutti che **richiedono l'intero team**. Per questo:
 
-- gli helper di calcolo della pipeline (`erosion_helper`/`dilation_helper` in
-  [morphologies.c](OpenMP/src/morphologies.c)) non contengono alcun costrutto di
-  worksharing: il proprio intervallo di righe lo ricavano da `row_range()`;
-- `pad_image` e `crop_image` restano invece **in contesto team completo**, fuori
-  dallo split, dove i loro `single`/`for` sono perfettamente leciti. È quindi
+- gli helper di calcolo della pipeline (`erosion_rows`/`dilation_rows` in
+  [morphologies.c](OpenMP/src/morphologies.c)) non contengono alcun costrutto:
+  il proprio intervallo di righe lo ricavano da `row_range()`;
+- `pad_image` e `crop_image` restano invece fuoridallo split,
+   dove i loro `single`/`for` sono perfettamente leciti. È quindi
   sovrapposta la sola fase di calcolo — che è anche quella dominante, dato che
   con un elemento strutturante 5×5 sono 25 letture per pixel di output.
 
@@ -108,9 +113,9 @@ Speedup_threading       = T_simd   / T_parallel(p)
 Speedup_totale          = T_scalar / T_parallel(p)   = prodotto dei due
 ```
 
-Servono entrambi i riferimenti. Il **totale** va misurato contro il codice
-scalare, perché il SIMD *è* parallelismo (data parallelism) e non appartiene al
-baseline. La curva di **thread scaling** va invece riferita a `T_simd`: usare
+Il **totale** va misurato contro il codice
+scalare, perché il SIMD *è* parallelismo e non appartiene al baseline.
+La curva di **thread scaling** va invece riferita a `T_simd`: usare
 quella scalare vi incorporerebbe un fattore costante di ~3,5×, spingendo
 l'efficienza per-thread sopra 1 ovunque e rendendo l'analisi di Amdahl priva di
 significato.
@@ -127,8 +132,7 @@ prevede `WARMUP_RUNS`(per evitare l'effetto della cold-cache) seguite da `TIMED_
 **ogni singola misurazione** viene salvata in un CSV.
 
 La versione OpenMP ha `#pragma omp simd` **sempre attivo** sui loop interni: il
-SIMD non è un asse crociato con gli altri, il suo contributo si isola dal
-confronto fra i due baseline.
+contributo del SIMD si isola dal confronto fra i due baseline.
 
 > **"C puro senza pragma" non significa scalare.** Clang a `-O2`
 > auto-vettorizza comunque: sulla macchina di test lo stesso sorgente sequenziale,
@@ -139,10 +143,11 @@ confronto fra i due baseline.
 
 | Parametro | Valori | Dove |
 |---|---|---|
-| Thread count | 1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20 | `TEST_THREAD_COUNTS` |
+| Thread count | 2, 4, 6, 8, 10, 12, 14, 16, 18, 20 | `TEST_THREAD_COUNTS` |
 | Dimensione immagine | 512², 1024², 2048², 4096² (griglie 1×1 … 8×8 di tile 512²) | `TEST_GRID_SIZES` |
 | Elemento strutturante | 3×3, 5×5, 9×9 (tutti 1) | `TEST_SE_SIZES` |
-| Profondità pipeline | 8 immagini | `PIPELINE_BATCH` |
+| Profondità pipeline | 16 immagini | `PIPELINE_BATCH` |
+| Weak scaling | mosaico di `p × 2` tile, batch 8 | `WEAK_COLS`, `WEAK_BATCH` |
 | Warm-up / misure | 2 / 10 per configurazione | `WARMUP_RUNS`, `TIMED_RUNS` |
 | Scheduling | `guided` sul loop centrale (vedi sotto) | [morphologies.c](OpenMP/src/morphologies.c) |
 
@@ -157,7 +162,7 @@ threading passa da 1,3× (SE 3×3) a 2,9× (SE 9×9).
 
 #### Cosa viene cronometrato
 
-Tutte e tre le operazioni misurano la **stessa cosa**: il wall-clock
+Entrambe le operazioni misurano la **stessa cosa**: il wall-clock
 dell'intero batch, padding e cropping inclusi, diviso per il numero di immagini.
 I tempi sono quindi un valore per-immagine e sono direttamente confrontabili fra
 loro.
@@ -198,21 +203,44 @@ Il file `experiment_run/results.csv` ha quindi una riga per ogni run
 cronometrata:
 
 ```
-run_id,implementation,threads,se_size,image_rows,image_cols,operation,run_index,seconds
+run_id,mode,implementation,threads,se_size,image_rows,image_cols,operation,run_index,seconds
 ```
 
 `run_id` è il timestamp fissato a inizio programma e condiviso da tutte le righe
 prodotte nella stessa esecuzione. `implementation` vale `sequential_scalar`,
 `sequential_simd` (entrambi baseline, sempre con `threads=1`) o `parallel`, ed è
-la colonna su cui si costruisce la decomposizione dello speedup.
+la colonna su cui si costruisce la decomposizione dello speedup. `mode` distingue
+i due esperimenti di scalabilità descritti sotto.
+
+### Strong scaling e weak scaling
+
+Il programma esegue **due esperimenti distinti**:
+
+| `mode` | cosa varia | legge di riferimento |
+|---|---|---|
+| `strong` | problema fisso, thread crescenti | **Amdahl**: lo speedup satura sulla frazione seriale |
+| `weak` | il carico cresce con i thread | **Gustafson-Barsis**: `S(p) = p − f·(p−1)` |
+
+Nel weak scaling a `p` thread il mosaico ha `p` righe di tile invece di una, così
+il **lavoro per thread resta costante**: si scalano le righe perché sono l'asse su
+cui il loop parallelo distribuisce le iterazioni. Il batch resta fisso
+(`WEAK_BATCH`), altrimenti cambierebbe anche la profondità della pipeline.
+
+La metrica riportata è lo **scaled speedup**, `p · T_base / T(p)` con `T_base` il
+tempo del baseline sequenziale vettorizzato sul carico base: idealmente il tempo
+resterebbe costante e lo scaled speedup varrebbe `p`. Dai punti misurati si stima
+la frazione seriale `f` della legge di Gustafson, che il
+grafico riporta accanto alla curva.
 
 ## Validazione della correttezza
 
 La versione parallela è verificata **pixel per pixel** contro il baseline
 sequenziale **scalare**, perché se i due coincidono
 allora né la vettorizzazione né il threading hanno alterato l'immagine. Il
-confronto copre tutte e tre le operazioni, 3 dimensioni di elemento
-strutturante (3×3, 5×5, 9×9) e 6 configurazioni di thread, per 54 configurazioni totali.
+confronto copre entrambe le operazioni, 3 dimensioni di elemento strutturante
+(3×3, 5×5, 9×9) e 7 configurazioni di thread, per 42 configurazioni totali. Fra i
+thread è incluso il caso a **1**, che è l'unico a esercitare il ramo di fallback di
+`image_opening`.
 
 ## Ambiente di test
 
@@ -239,5 +267,4 @@ fatta da `stb_image` in fase di caricamento, che resta fuori dalle misure.
 cd OpenMP
 make            # compila in build/, produce l'eseguibile ./main
 ./main          # baseline sequenziale + sweep thread x dimensione -> experiment_run/results.csv
-make test       # validazione parallelo vs sequenziale
 ```

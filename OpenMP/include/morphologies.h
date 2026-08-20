@@ -4,9 +4,9 @@
 #include "matrix.h"
 
 // Tempo dell'ultima operazione morfologica, in secondi.
-// Per erosione/dilatazione e' il solo loop centrale (padding e cropping esclusi);
-// per opening e' il wall-clock dell'intera pipeline diviso per il numero
-// di immagini del batch, cioe' un tempo per-immagine.
+// Per tutte le operazioni e' il wall-clock dell'intero batch, padding e cropping
+// inclusi, diviso per il numero di immagini: un tempo per-immagine, quindi
+// confrontabile fra operazioni diverse.
 extern double last_op_seconds;
 
 void image_erosion(matrix** img, matrix* structuring_element, matrix* scratch, int size);

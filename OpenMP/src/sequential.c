@@ -137,20 +137,13 @@ static void run_stage(matrix* img, matrix* se, u_int8_t fill,
     seq_crop(img, c);
 }
 
-// Tutte e quattro le operazioni cronometrano l'intero batch, padding e cropping
+// Entrambe le operazioni cronometrano l'intero batch, padding e cropping
 // inclusi, dividendo per il numero di immagini: stessa convenzione della
 // versione parallela, quindi i tempi sono direttamente confrontabili.
 void SEQ(seq_erosion)(matrix** img, matrix* structuring_element, int size) {
     double t0 = now_seconds();
     for (int k = 0; k < size; k++)
         run_stage(img[k], structuring_element, 255, erosion_kernel);
-    SEQ(last_seq_seconds) = (now_seconds() - t0) / size;
-}
-
-void SEQ(seq_dilation)(matrix** img, matrix* structuring_element, int size) {
-    double t0 = now_seconds();
-    for (int k = 0; k < size; k++)
-        run_stage(img[k], structuring_element, 0, dilation_kernel);
     SEQ(last_seq_seconds) = (now_seconds() - t0) / size;
 }
 
