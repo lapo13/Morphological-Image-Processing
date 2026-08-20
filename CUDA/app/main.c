@@ -10,76 +10,10 @@
 
 #define SE_SIZE 5
 #define DATASET_DIR "../brain-cancer-mri-dataset/Brain_Cancer raw MRI data/Brain_Cancer/"
-#define WARMUP_RUNS 5
-#define TIMED_RUNS 40
-#define MAX_MOSAIC_TILES 64
+#define WARMUP_RUNS 2
+#define TIMED_RUNS 10
 
-static const char* MOSAIC_TILES[MAX_MOSAIC_TILES] = {
-    DATASET_DIR "brain_menin/brain_menin_0001.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0001.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0001.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0002.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0002.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0002.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0003.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0003.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0003.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0004.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0004.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0004.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0005.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0005.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0005.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0006.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0006.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0006.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0007.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0007.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0007.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0008.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0008.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0008.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0009.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0009.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0009.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0010.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0010.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0010.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0011.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0011.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0011.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0012.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0012.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0012.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0013.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0013.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0013.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0014.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0014.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0014.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0015.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0015.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0015.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0016.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0016.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0016.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0017.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0017.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0017.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0018.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0018.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0018.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0019.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0019.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0019.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0020.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0020.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0020.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0021.jpg",
-    DATASET_DIR "brain_tumor/brain_tumor_0021.jpg",
-    DATASET_DIR "brain_glioma/brain_glioma_0021.jpg",
-    DATASET_DIR "brain_menin/brain_menin_0022.jpg"
-};
+
 
 typedef struct {
     int rows;

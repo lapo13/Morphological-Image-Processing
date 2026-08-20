@@ -34,22 +34,6 @@ void save_image(const char* filename, matrix* img) {
      }
 }
 
-void pad_image(matrix* img, matrix* padded_img, int padding_size, u_int8_t fill_value) {
-    int new_rows = img->rows + 2 * padding_size;
-    int new_cols = img->cols + 2 * padding_size;
-
-    allocate_matrix(padded_img, new_rows, new_cols);
-    memset(padded_img->data[0], fill_value, new_rows * new_cols);
-
-    for (int i = 0; i < img->rows; i++) {
-        for (int j = 0; j < img->cols; j++) {
-            padded_img->data[i + padding_size][j + padding_size] = img->data[i][j];
-        }
-    }
-
-    move_matrix_data(img, padded_img);
-}
-
 void paste_image(matrix* dest, matrix* src, int row_offset, int col_offset) {
     if (dest->rows < src->rows + row_offset || dest->cols < src->cols + col_offset) {
         fprintf(stderr, "Error: Source image does not fit within destination image at the specified offset.\n");
@@ -80,19 +64,4 @@ void build_mosaic_image(matrix* dest, matrix* tile_buffer, const char** tile_pat
         paste_image(dest, tile_buffer, gi * tile_rows, gj * tile_cols);
         free_matrix(tile_buffer);
     }
-}
-
-void crop_image(matrix* img, matrix* cropped_img, int crop_size) {
-    int new_rows = img->rows - 2 * crop_size;
-    int new_cols = img->cols - 2 * crop_size;
-
-    allocate_matrix(cropped_img, new_rows, new_cols);
-
-    for (int i = 0; i < new_rows; i++) {
-        for (int j = 0; j < new_cols; j++) {
-            cropped_img->data[i][j] = img->data[i + crop_size][j + crop_size];
-        }
-    }
-
-    move_matrix_data(img, cropped_img);
 }
