@@ -1,10 +1,9 @@
 NVCC := nvcc
 
-# Architettura della GPU target: verifica con `nvidia-smi` sull'istanza AWS e
-# aggiusta se necessario (T4 = sm_75, V100 = sm_70, A10G = sm_86, A100 = sm_80).
-ARCH := -arch=sm_75
 
-NVCCFLAGS := -O2 -std=c++14 -Iinclude -Iexternal $(ARCH)
+ARCH := -arch=sm_86
+
+NVCCFLAGS := -O2 -std=c++14 -Iinclude -Iexternal $(ARCH) -Xptxas -v
 LDFLAGS :=
 
 SRC_DIR := src

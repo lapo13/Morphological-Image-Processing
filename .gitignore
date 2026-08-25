@@ -9,5 +9,5 @@ OpenMP/analysis
 CUDA/build
 CUDA/main
 CUDA/output
-OpenMP/tests
 CUDA/app/hardware_cap.c
+CUDA/analysis
