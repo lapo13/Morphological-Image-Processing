@@ -7,7 +7,7 @@
 #include "matrix.h"
 #include "image.h"
 #include "morphologies.h"
-#include "reference.h"
+#include "sequential.h"
 #include "logger.h"
 
 #define DATASET_DIR "../brain-cancer-mri-dataset/Brain_Cancer raw MRI data/Brain_Cancer"
@@ -22,12 +22,6 @@
 // la profondita' della pipeline e i due effetti sarebbero indistinguibili.
 #define WEAK_COLS  2
 #define WEAK_BATCH 8
-
-// La validazione usa un mosaico piccolo e un batch ridotto, perche' il
-// confronto viene eseguito contro il riferimento scalare.
-#define VALIDATION_BATCH 2
-#define VALIDATION_SE 3
-#define VALIDATION_THREADS 2
 
 // Dimensioni dell'elemento strutturante. Il costo per pixel cresce col numero
 // di celle (9, 25, 81), quindi questo asse varia l'intensita' aritmetica del
@@ -62,11 +56,6 @@ static int sample_count = 0;
 static matrix  source[PIPELINE_BATCH];
 static matrix  working[PIPELINE_BATCH];
 static matrix* batch[PIPELINE_BATCH];
-
-// Output separato del riferimento scalare: deve coesistere con quello OpenMP
-// per consentire il confronto pixel per pixel.
-static matrix  seq_working[PIPELINE_BATCH];
-static matrix* seq_batch[PIPELINE_BATCH];
 
 typedef void (*morph_op)(matrix**, matrix*, matrix*, int);
 
@@ -110,7 +99,8 @@ static void report(const char* label, double sum, double min) {
     printf("  %-9s mean=%.5f s  min=%.5f s  (per immagine)\n", label, sum / TIMED_RUNS, min);
 }
 
-// clock: puntatore alla variabile di timing della variante in uso.
+// clock: puntatore alla variabile di timing della variante in uso
+// (last_seq_seconds_scalar oppure last_seq_seconds_simd).
 static void benchmark_seq_batch(seq_batch_op op, const char* label, matrix* se,
                                 const double* clock, int batch_size) {
     for (int r = 0; r < WARMUP_RUNS; r++) {
@@ -137,83 +127,6 @@ static void run_sequential_baseline(const char* impl_name, const char* run_id, m
     benchmark_seq_batch(opening, "opening", se, clock, PIPELINE_BATCH);
     log_timings_csv(run_id, "strong", impl_name, run_samples, sample_count, 1,
                     se->rows, source[0].rows, source[0].cols);
-}
-
-// ---------------------------------------------------------------------------
-// Validazione della correttezza contro il riferimento scalare
-// ---------------------------------------------------------------------------
-
-static int compare_batches(matrix** a, matrix** b, int batch_size) {
-    int diffs = 0;
-
-    for (int k = 0; k < batch_size; k++) {
-        if (a[k]->rows != b[k]->rows || a[k]->cols != b[k]->cols) {
-            fprintf(stderr, "Confronto impossibile: immagine %d e' %dx%d contro %dx%d\n",
-                    k, a[k]->rows, a[k]->cols, b[k]->rows, b[k]->cols);
-            return -1;
-        }
-
-        for (int i = 0; i < a[k]->rows; i++) {
-            for (int j = 0; j < a[k]->cols; j++) {
-                if (a[k]->data[i][j] != b[k]->data[i][j]) diffs++;
-            }
-        }
-    }
-
-    return diffs;
-}
-
-static int validate_op(const char* label, morph_op parallel_op, seq_batch_op scalar_op,
-                       matrix* se, matrix* scratch, int num_threads) {
-    #pragma omp parallel num_threads(num_threads)
-    {
-        for (int k = 0; k < VALIDATION_BATCH; k++)
-            copy_matrix(&source[k], &working[k]);
-        parallel_op(batch, se, scratch, VALIDATION_BATCH);
-    }
-
-    for (int k = 0; k < VALIDATION_BATCH; k++)
-        copy_matrix_serial(&source[k], &seq_working[k]);
-    scalar_op(seq_batch, se, VALIDATION_BATCH);
-
-    int diffs = compare_batches(batch, seq_batch, VALIDATION_BATCH);
-    printf("    %-9s threads=%-3d -> %s (%d pixel diversi)\n",
-           label, num_threads, diffs == 0 ? "ok" : "FAIL", diffs);
-
-    return diffs < 0 ? 1 : diffs;
-}
-
-static int run_validation(char** tiles, matrix* tile_buffer, matrix* se, matrix* scratch) {
-    int failures = 0;
-
-    printf("\n\n########## Validazione contro il riferimento sequenziale scalare ##########\n");
-
-    for (int k = 0; k < VALIDATION_BATCH; k++) {
-        build_mosaic_image(&source[k], tile_buffer, (const char**)&tiles[k], 1, 1);
-    }
-
-    free_matrix(se);
-    allocate_matrix(se, VALIDATION_SE, VALIDATION_SE);
-    for (int i = 0; i < VALIDATION_SE; i++)
-        for (int j = 0; j < VALIDATION_SE; j++)
-            se->data[i][j] = 1;
-
-    printf("\nImmagini %dx%d, batch %d, SE %dx%d, %d thread\n",
-           source[0].rows, source[0].cols, VALIDATION_BATCH,
-           VALIDATION_SE, VALIDATION_SE, VALIDATION_THREADS);
-
-    failures += validate_op("erosion", image_erosion, seq_erosion_scalar,
-                            se, scratch, VALIDATION_THREADS);
-    failures += validate_op("opening", image_opening, seq_opening_scalar,
-                            se, scratch, VALIDATION_THREADS);
-
-    for (int k = 0; k < VALIDATION_BATCH; k++) {
-        free_matrix(&source[k]);
-        free_matrix(&working[k]);
-        free_matrix(&seq_working[k]);
-    }
-
-    return failures;
 }
 
 int main(void) {
@@ -248,23 +161,7 @@ int main(void) {
         source[k]  = (matrix){0};
         working[k] = (matrix){0};
         batch[k]   = &working[k];
-        seq_working[k] = (matrix){0};
-        seq_batch[k]   = &seq_working[k];
     }
-
-    // La correttezza viene verificata prima dei benchmark, cosi' un errore non
-    // produce campioni CSV che verrebbero poi analizzati come risultati validi.
-    int failures = run_validation(tiles, &tile_buffer, &structuring_element, &scratch);
-    if (failures != 0) {
-        fprintf(stderr, "\nVALIDAZIONE FALLITA: %d differenze totali rispetto al riferimento scalare\n",
-                failures);
-        free_matrix(&structuring_element);
-        free_matrix(&scratch);
-        free_matrix(&tile_buffer);
-        free_dataset(tiles, ntiles);
-        return EXIT_FAILURE;
-    }
-    printf("\nValidazione superata: output OpenMP identico al riferimento scalare.\n");
 
     for (int s = 0; s < NUM_TEST_SIZES; s++) {
         int grid_rows  = TEST_GRID_SIZES[s].rows;
@@ -407,6 +304,5 @@ int main(void) {
     free_matrix(&scratch);
     free_matrix(&tile_buffer);
     free_dataset(tiles, ntiles);
-
     return 0;
 }

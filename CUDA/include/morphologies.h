@@ -2,17 +2,17 @@
 #define MORPHOLOGIES_H
 
 #include "matrix.h"
-#include "cuda_config.h"
 
-// Incluso da main.c, che e' C: le API vanno esposte con linkage C.
+// Necessario per 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-extern double last_kernel_seconds;
+extern double last_op_seconds;
 
-void image_erosion(matrix** img, matrix* structuring_element, int size, cuda_config cfg);
-void image_opening(matrix** img, matrix* structuring_element, int size, cuda_config cfg);
+
+void image_erosion(matrix** img, matrix* structuring_element, matrix* scratch, int size, int use_shared_memory);
+void image_opening(matrix** img, matrix* structuring_element, matrix* scratch, int size, int use_shared_memory);
 
 #ifdef __cplusplus
 }

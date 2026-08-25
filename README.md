@@ -2,9 +2,9 @@
 
 Benchmark di operazioni di morfologia matematica su immagini in scala di grigi
 (erosione e opening), applicate a mosaici composti da
-immagini del [Brain Cancer MRI dataset](brain-cancer-mri-dataset/). Il repository
-contiene un'implementazione OpenMP per CPU e una CUDA per GPU, analizzate con
-metodologie distinte e coerenti con i rispettivi modelli di esecuzione.
+immagini del [Brain Cancer MRI dataset](brain-cancer-mri-dataset/), parallelizzate
+con OpenMP e misurate al variare del numero di thread e della dimensione
+dell'immagine di input.
 
 ## Struttura del repository
 
@@ -17,15 +17,14 @@ Esame/
 │   ├── include/                # header dei sorgenti
 │   ├── external/               # librerie header-only di terze parti (stb_image)
 │   └── experiment_run/         # output dei benchmark (CSV + grafici, non versionato)
-└── CUDA/                       # implementazione CUDA e analisi naïve/shared
+└── CUDA/                       # implementazione CUDA (in sviluppo), stesso layout
     ├── app/ src/ include/ external/
-    ├── analysis/               # analizzatore dei tempi kernel e grafici
-    └── experiment_run/         # risultati CSV (non versionati)
+    └── ...
 ```
 
 ## Come funziona
 
-### Pipeline dati e operazioni OpenMP
+### Pipeline dati
 
 1. `scan_dataset` ([image.c](OpenMP/src/image.c)) enumera a runtime i tile `.jpg`
    sotto la radice del dataset (6056 immagini 512×512 nelle tre classi
@@ -33,20 +32,16 @@ Esame/
 
 2. `build_mosaic_image` ([image.c](OpenMP/src/image.c)) compone un'immagine di
    test incollando tile quadrati caricati dal dataset, producendo
-   immagini via via più grandi al crescere della griglia. In OpenMP le operazioni
-   composte lavorano su un **batch di `PIPELINE_BATCH` mosaici distinti**: ognuno usa una
+   immagini via via più grandi al crescere della griglia. Le operazioni composte
+   lavorano su un **batch di `PIPELINE_BATCH` mosaici distinti**: ognuno usa una
    fetta diversa del dataset, per un totale di `righe × colonne × PIPELINE_BATCH`
    tile per configurazione.
 
-3. In OpenMP ogni operazione morfologica segue lo schema classico
-   "pad → sliding window sulla struttura → crop": l'immagine viene prima
+3. Ogni operazione morfologica segue lo schema classico "pad → sliding window sulla struttura → crop": l'immagine viene prima
    espansa (`pad_image`) di metà lato dell'elemento strutturante, poi si scorre
    una finestra calcolando min (erosione) o max (dilatazione)
    dei pixel coperti dall'elemento strutturante, infine si ritaglia (`crop_image`)
    il bordo aggiunto dal padding.
-
-   CUDA non materializza il padding: i kernel applicano direttamente il valore
-   neutro quando una coordinata della finestra cade fuori dall'immagine.
 
 4. `image_opening` = erosione poi dilatazione. Non è però una semplice
    composizione sequenziale delle due primitive: è realizzata come **pipeline
@@ -84,7 +79,7 @@ costrutti che **richiedono l'intero team**. Per questo:
 - gli helper di calcolo della pipeline (`erosion_rows`/`dilation_rows` in
   [morphologies.c](OpenMP/src/morphologies.c)) non contengono alcun costrutto:
   il proprio intervallo di righe lo ricavano da `row_range()`;
-- `pad_image` e `crop_image` restano invece fuori dallo split,
+- `pad_image` e `crop_image` restano invece fuoridallo split,
    dove i loro `single`/`for` sono perfettamente leciti. È quindi
   sovrapposta la sola fase di calcolo — che è anche quella dominante, dato che
   con un elemento strutturante 5×5 sono 25 letture per pixel di output.
@@ -95,7 +90,7 @@ memoria. Con un solo thread si ricade su una composizione sequenziale.
 
 ### Baseline sequenziale e decomposizione dello speedup
 
-[reference.c](OpenMP/src/reference.c) contiene un'implementazione in **C puro,
+[sequential.c](OpenMP/src/sequential.c) contiene un'implementazione in **C puro,
 senza alcuna direttiva OpenMP** (il tempo si misura con `clock_gettime`).
 Il kernel è identico a quello parallelo —
 stesso schema pad → finestra scorrevole con maschera → crop — così l'unica
@@ -173,8 +168,8 @@ I tempi sono quindi un valore per-immagine e sono direttamente confrontabili fra
 loro.
 
 Cronometrare il batch anziché la singola immagine serve anche alla qualità della
-misura: misurare più immagini per volta riduce il peso relativo del rumore di scheduling.
-La stabilità è recuperata per via statistica, mediando su `TIMED_RUNS`
+misura: misurare 8nimmagini per volta riducen il peso relativo del rumore di scheduling.
+La stabilità è recuperata per via statistica,mediando su `TIMED_RUNS`
 misure di cui il CSV conserva ogni singolo campione.
 
 #### Scelta dello scheduling
@@ -237,134 +232,17 @@ resterebbe costante e lo scaled speedup varrebbe `p`. Dai punti misurati si stim
 la frazione seriale `f` della legge di Gustafson, che il
 grafico riporta accanto alla curva.
 
-## Implementazione CUDA
-
-L'esperimento CUDA non confronta direttamente CPU e GPU: sono architetture con
-modelli di esecuzione differenti e il server CUDA non condivide una piattaforma
-hardware di riferimento con i test OpenMP. La GPU viene quindi studiata
-separatamente, osservando il tempo dei kernel al crescere del problema e
-confrontando due implementazioni dello stesso algoritmo morfologico generico:
-
-- `naive`, che legge direttamente dalla global memory;
-- `shared`, che carica un tile con halo in shared memory e riusa i pixel fra
-  finestre adiacenti.
-
-Non vengono impiegati filtri separabili o deque monotone. Queste ottimizzazioni
-dipenderebbero dalla forma dell'elemento strutturante e cambierebbero la
-complessità dell'algoritmo soltanto in una delle due implementazioni, rendendo
-impossibile attribuire lo speedup all'uso della shared memory. Entrambi i kernel
-rispettano invece la maschera generica memorizzata in constant memory.
-
-### Kernel naïve
-
-Il mapping è quello CUDA naturale, senza griglie persistenti o grid-stride loop:
-
-```c
-col   = blockIdx.x * blockDim.x + threadIdx.x;
-row   = blockIdx.y;
-chunk = blockIdx.z;
-```
-
-Ogni thread calcola un pixel e attraversa tutte le celle attive dell'elemento
-strutturante. Il blocco del benchmark contiene 256 thread, cioè 8 warp, e la
-griglia ha dimensioni `ceil(width / 256) × height × batch`. Il numero di blocchi
-non è un parametro del benchmark e non viene registrato: è una conseguenza
-della dimensione dell'immagine e CUDA li distribuisce autonomamente sugli SM.
-
-### Kernel tiled/shared
-
-Anche il kernel shared usa blocchi da 256 thread, ma ogni thread produce quattro
-colonne adiacenti per 8 righe di output. Un blocco copre quindi un tile di output
-da `1024 × 8` pixel:
-
-```text
-larghezza output = 256 thread × 4 pixel = 1024 pixel
-altezza output   = SHARED_TILE_ROWS = 8 pixel
-```
-
-Il tile di input comprende l'halo richiesto dall'elemento strutturante. L'halo
-orizzontale viene arrotondato a quattro byte e il caricamento cooperativo usa
-`uchar4`: i thread consecutivi trasferiscono word consecutive e gli accessi
-globali risultano coalescenti. I pixel esterni all'immagine sono sostituiti con
-l'elemento neutro della riduzione, 255 per l'erosione e 0 per la dilatazione.
-
-Dopo una sola barriera `__syncthreads()`, ogni thread calcola i propri quattro
-output orizzontali. Le quattro finestre sovrapposte leggono `K+3` byte distinti
-per ogni riga dell'SE invece di quattro gruppi separati da `K`, ma ciascun
-output continua a eseguire la riduzione generica sulle celle attive della
-maschera. La griglia è
-`ceil(width / 1024) × ceil(height / 8) × batch`.
-
-Con l'SE massimo 9×9 il tile occupa:
-
-```text
-(8 + 2×4) righe × (1024 + 2×4) byte = 16.512 byte di shared memory
-```
-
-Sulla build osservata per `sm_86`, la compilazione con `-Xptxas -v` riporta 33
-registri per thread, nessuno spill e una barriera per il kernel shared; il naïve
-usa 25 registri e nessuna barriera.
-
-### Esperimento CUDA
-
-La GPU e il numero di SM restano fissi mentre cresce la dimensione dell'input.
-Questo esperimento è indicato nel CSV come `problem_size`: non è strong scaling,
-perché non varia il numero di risorse, e non è weak scaling formale, perché non
-esiste un parametro di parallelismo controllato rispetto al quale mantenere
-costante il lavoro per risorsa.
-
-| Parametro | Valori |
-|---|---|
-| Larghezza immagine | 4096 pixel, 8 tile |
-| Altezza immagine | 512, 1024, 2048, 4096, 8192, 16384, 32768 pixel |
-| Batch | 8 immagini |
-| Elemento strutturante | 3×3, 5×5, 9×9; forma piena e invariata |
-| Operazioni | erosione, opening |
-| Implementazioni | naïve/global, tiled/shared |
-| Thread per blocco | 256 |
-| Righe per blocco shared | 8 |
-| Warm-up / misure | 2 / 10 per configurazione |
-
-La dimensione dell'SE modifica il lavoro per pixel mantenendone fissa la forma:
-non è quindi un confronto fra differenti tipi di elemento strutturante, ma fra
-tre dimensioni della stessa maschera quadrata piena. Il codice dei kernel resta
-comunque generico e verifica `c_se.values` per ogni cella.
-
-### Cosa viene cronometrato in CUDA
-
-La sola metrica è il tempo della regione dei kernel, espresso in secondi per
-immagine. Un timer host basato su `clock_gettime` viene avviato immediatamente
-prima dei lanci e fermato dopo `cudaDeviceSynchronize()`.
-
-Sono esclusi:
-
-- allocazioni e deallocazioni device;
-- trasferimenti host-to-device e device-to-host;
-- scansione del dataset e costruzione dei mosaici.
-
-Per l'erosione la regione contiene un kernel; per l'opening contiene erosione e
-dilatazione consecutive, mantenendo il risultato intermedio sulla GPU. Il tempo
-totale della regione viene diviso per le 8 immagini del batch.
-
-Il riferimento CPU è utilizzato esclusivamente
-per verificare gli output e non viene cronometrato né scritto nel CSV.
-
 ## Validazione della correttezza
 
-La versione OpenMP è verificata **pixel per pixel** contro il baseline
-sequenziale **scalare** su un caso rappresentativo: batch di 2 immagini
-512×512, elemento strutturante 3×3 e 2 thread OpenMP. Il confronto copre erosione
-e opening. La validazione viene eseguita prima degli esperimenti di scaling: se
-trova almeno una differenza, il programma termina senza produrre dati da analizzare.
-
-La versione CUDA viene confrontata con un riferimento CPU separato, non incluso
-nei benchmark. La validazione copre erosione e opening per SE 3×3, 5×5 e 9×9,
-più dimensioni del blocco e tile shared alti 1, 4, 8 e 16 righe. Anche in questo
-caso ogni differenza interrompe il programma prima della scrittura dei tempi.
+La versione parallela è verificata **pixel per pixel** contro il baseline
+sequenziale **scalare**, perché se i due coincidono
+allora né la vettorizzazione né il threading hanno alterato l'immagine. Il
+confronto copre entrambe le operazioni, 3 dimensioni di elemento strutturante
+(3×3, 5×5, 9×9) e 7 configurazioni di thread, per 42 configurazioni totali. Fra i
+thread è incluso il caso a **1**, che è l'unico a esercitare il ramo di fallback di
+`image_opening`.
 
 ## Ambiente di test
-
-### OpenMP
 
 | | |
 |---|---|
@@ -374,18 +252,6 @@ caso ogni differenza interrompe il programma prima della scrittura dei tempi.
 | Compilatore | Apple clang 21.0.0, `-O2 -Xclang -fopenmp` |
 | Runtime OpenMP | LLVM libomp 22.1.8 (Homebrew) |
 
-### CUDA
-
-| | |
-|---|---|
-| GPU | NVIDIA GeForce RTX 3090 |
-| Streaming Multiprocessor | 82 SM |
-| Compute capability | 8.6 |
-| Architettura di compilazione | `sm_86` |
-| Compilatore | `nvcc -O2 -arch=sm_86` |
-| CPU host | Dipende dal server CUDA esterno; non usata come riferimento prestazionale |
-| OS | UBUNTU 22.04 |
-
 ## Dataset
 
 [Brain Cancer MRI dataset](https://www.kaggle.com/datasets/orvile/brain-cancer-mri-dataset)
@@ -393,23 +259,12 @@ caso ogni differenza interrompe il programma prima della scrittura dei tempi.
 `brain_menin`, `brain_tumor`). Nessun preprocessing è applicato oltre alla conversione a singolo canale
 fatta da `stb_image` in fase di caricamento, che resta fuori dalle misure.
 
-## Build ed esecuzione del benchmark
+## Come eseguire
+
+### Build ed esecuzione del benchmark
 
 ```sh
 cd OpenMP
 make            # compila in build/, produce l'eseguibile ./main
 ./main          # baseline sequenziale + sweep thread x dimensione -> experiment_run/results.csv
 ```
-
-Per CUDA, sul server dotato di RTX 3090:
-
-```sh
-cd CUDA
-make clean       # necessario dopo modifiche ai flag di compilazione
-make             # compila per sm_86 e mostra l'uso delle risorse ptxas
-./main           # validazione + benchmark -> experiment_run/kernel_results.csv
-```
-
-Il CSV è append-only. Prima di eseguire una versione con uno schema del log
-diverso occorre archiviare o rimuovere il file precedente, evitando di mescolare
-righe con intestazioni incompatibili.
