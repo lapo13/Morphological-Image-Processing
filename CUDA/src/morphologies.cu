@@ -1,44 +1,18 @@
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <cmath>
-#include <ctime>
 #include <cstdint>
+#include <ctime>
 #include <cuda_runtime.h>
 
 #include "morphologies.h"
-#include "image.h"
+#include "cuda_utils.cuh"
 
-double last_op_seconds = 0.0;
+double last_kernel_seconds = 0.0;
 
 static double now_seconds(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec + ts.tv_nsec * 1e-9;
-}
-
-// I launch sono asincroni: senza questo controllo un fallimento (tipicamente
-// shared memory richiesta oltre il limite del blocco) passa silenzioso e si
-// manifesta come risultato sbagliato.
-static void check_launch(const char* what) {
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "%s: launch fallito -> %s\n", what, cudaGetErrorString(err));
-        exit(EXIT_FAILURE);
-    }
-}
-
-// Le device properties non cambiano durante l'esecuzione: interrogarle a ogni
-// launch significherebbe metterle dentro la regione cronometrata, due volte per
-// ogni opening. Si leggono una volta sola.
-static const cudaDeviceProp& device_properties(void) {
-    static cudaDeviceProp prop;
-    static bool loaded = false;
-    if (!loaded) {
-        cudaGetDeviceProperties(&prop, 0);
-        loaded = true;
-    }
-    return prop;
 }
 
 constexpr int MAX_SE_ROWS = 9;
@@ -73,267 +47,256 @@ static void upload_structuring_element(matrix* structuring_element) {
         }
     }
 
-    cudaMemcpyToSymbol(c_se, &se, sizeof(StructuringElement));
+    CUDA_CHECK(cudaMemcpyToSymbol(c_se, &se, sizeof(StructuringElement)));
 }
 
-// Fallback senza shared memory: ogni thread legge la propria finestra direttamente
-// dalla global. Prende il structuring element da c_se come la variante con shared,
-// cosi' fra i due l'unica differenza e' l'accesso ai pixel dell'immagine.
-__global__
-    static void ErosionKernel(const u_int8_t* d_img, u_int8_t* d_scratch, int HEIGHT, int WIDTH) {
-        int se_rows = c_se.rows;
-        int se_cols = c_se.cols;
-        int se_radius_y = c_se.radius_y;
-        int se_radius_x = c_se.radius_x;
+// ---------------------------------------------------------------------------
+// Kernel
+// ---------------------------------------------------------------------------
 
-        int row = blockIdx.y * blockDim.y + threadIdx.y;
-        int col = blockIdx.x * blockDim.x + threadIdx.x;
-        int chunk = blockIdx.z; // Get the index of the image in the array
-        if (row >= HEIGHT || col >= WIDTH) return; // Check if the thread is within the image bounds
+__device__ inline uint8_t reduce(uint8_t a, uint8_t b, int is_erosion) {
+    return is_erosion ? (a < b ? a : b) : (a > b ? a : b);
+}
 
-        size_t base = (size_t)chunk * HEIGHT * WIDTH; // Offset of this image inside the batch
-        u_int8_t min_value = 255;
+__global__ void MorphKernel(const uint8_t* d_in, uint8_t* d_out, int HEIGHT, int WIDTH,
+                            int is_erosion) {
+    const int se_rows = c_se.rows;
+    const int se_cols = c_se.cols;
+    const int radius_y = c_se.radius_y;
+    const int radius_x = c_se.radius_x;
 
-        for (int i = 0; i < se_rows; ++i) {
-            for (int j = 0; j < se_cols; ++j) {
-                int img_row = row + i - se_radius_y;
-                int img_col = col + j - se_radius_x;
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y;
+    const int chunk = blockIdx.z;
+    if (row >= HEIGHT || col >= WIDTH) return;
 
-                if (img_row >= 0 && img_row < HEIGHT && img_col >= 0 && img_col < WIDTH) {
-                    if (c_se.values[i * se_cols + j] == 1) {
-                        min_value = min(min_value, d_img[base + (size_t)img_row * WIDTH + img_col]);
-                    }
-                }
-            }
+    const int base = chunk * HEIGHT * WIDTH;
+    uint8_t acc = is_erosion ? 255 : 0;
+    for (int i = 0; i < se_rows; ++i) {
+        int img_row = row + i - radius_y;
+        if (img_row < 0 || img_row >= HEIGHT) continue;
+
+        for (int j = 0; j < se_cols; ++j) {
+            int img_col = col + j - radius_x;
+            if (img_col < 0 || img_col >= WIDTH) continue;
+            if (c_se.values[i * se_cols + j] != 1) continue;
+
+            acc = reduce(acc, d_in[base + img_row * WIDTH + img_col], is_erosion);
         }
-        d_scratch[base + (size_t)row * WIDTH + col] = min_value;
     }
 
-__global__
-    static void SharedErosionKernel(const u_int8_t* d_img, u_int8_t* d_scratch, int HEIGHT, int WIDTH) {
-        extern __shared__ u_int8_t shared_pixels[];
+    d_out[base + row * WIDTH + col] = acc;
+}
 
-        int se_rows = c_se.rows;
-        int se_cols = c_se.cols;
-        int se_radius_y = c_se.radius_y;
-        int se_radius_x = c_se.radius_x;
+__global__ void SharedMorphKernel(const uint8_t* d_in, uint8_t* d_out, int HEIGHT, int WIDTH,
+                                  int is_erosion, int rows_per_block) {
+    extern __shared__ uchar4 shared_words[];
 
-        int tx = threadIdx.x;
-        int row = blockIdx.y; // un blocco per riga dell'immagine
-        int col = blockIdx.x * blockDim.x + tx;
-        int chunk = blockIdx.z; // Get the index of the image in the array
+    const int se_rows = c_se.rows;
+    const int se_cols = c_se.cols;
+    const int radius_y = c_se.radius_y;
+    const int radius_x = c_se.radius_x;
 
-        size_t base = (size_t)chunk * HEIGHT * WIDTH; // Offset of this image inside the batch
-        int tile_cols = blockDim.x + 2 * se_radius_x; // stride di una riga del tile
+    const int tx = threadIdx.x;
+    const int output_cols = blockDim.x * CUDA_SHARED_PIXELS_PER_THREAD;
 
-        for (int i = 0; i < se_rows; ++i) {
-            int img_row = row + i - se_radius_y;
-            for (int s = tx; s < tile_cols; s += blockDim.x) {
-                int img_col = blockIdx.x * blockDim.x + s - se_radius_x;
-                shared_pixels[i * tile_cols + s] =
-                    (img_row >= 0 && img_row < HEIGHT && img_col >= 0 && img_col < WIDTH)
-                    ? d_img[base + (size_t)img_row * WIDTH + img_col]
-                    : 255;
-            }
-        }
-        __syncthreads();
+    const int aligned_halo_x = (radius_x + 3) & ~3;
+    const int tile_pitch = output_cols + 2 * aligned_halo_x;
+    const int words_per_row = tile_pitch / 4;
+    const int tile_rows = rows_per_block + 2 * radius_y;
 
-        if (col >= WIDTH) return; // Check if the thread is within the image bounds
+    const uint8_t neutral = is_erosion ? 255 : 0;
+    uint8_t* shared_pixels = reinterpret_cast<uint8_t*>(shared_words);
 
-        u_int8_t min_value = 255;
-        for (int i = 0; i < se_rows; ++i) {
-            for (int j = 0; j < se_cols; ++j) {
-                if (c_se.values[i * se_cols + j] == 1) {
-                    min_value = min(min_value, shared_pixels[i * tile_cols + tx + j]);
+    const int row_base = blockIdx.y * rows_per_block;
+    const int col_base = blockIdx.x * output_cols;
+    const int output_col = col_base + tx * CUDA_SHARED_PIXELS_PER_THREAD;
+    const int chunk = blockIdx.z;
+    const int base = chunk * HEIGHT * WIDTH;
+
+    for (int i = 0; i < tile_rows; ++i) {
+        int img_row = row_base + i - radius_y;
+        for (int word = tx; word < words_per_row; word += blockDim.x) {
+            int img_col = col_base + word * 4 - aligned_halo_x;
+            uchar4 packed = make_uchar4(neutral, neutral, neutral, neutral);
+
+            if (img_row >= 0 && img_row < HEIGHT) {
+                int input_offset = base + img_row * WIDTH + img_col;
+                if (img_col >= 0 && img_col + 3 < WIDTH && (input_offset & 3) == 0) {
+                    packed = *reinterpret_cast<const uchar4*>(
+                        d_in + input_offset);
+                } else {
+                    if (img_col >= 0 && img_col < WIDTH)
+                        packed.x = d_in[base + img_row * WIDTH + img_col];
+                    if (img_col + 1 >= 0 && img_col + 1 < WIDTH)
+                        packed.y = d_in[base + img_row * WIDTH + img_col + 1];
+                    if (img_col + 2 >= 0 && img_col + 2 < WIDTH)
+                        packed.z = d_in[base + img_row * WIDTH + img_col + 2];
+                    if (img_col + 3 >= 0 && img_col + 3 < WIDTH)
+                        packed.w = d_in[base + img_row * WIDTH + img_col + 3];
                 }
             }
+            shared_words[i * words_per_row + word] = packed;
         }
-        d_scratch[base + (size_t)row * WIDTH + col] = min_value;
+    }
+    __syncthreads();
+
+    if (output_col < WIDTH) {
+        for (int r = 0; r < rows_per_block; ++r) {
+            const int row = row_base + r;
+            if (row >= HEIGHT) break;
+
+            uint8_t acc0 = neutral;
+            uint8_t acc1 = neutral;
+            uint8_t acc2 = neutral;
+            uint8_t acc3 = neutral;
+
+            for (int i = 0; i < se_rows; ++i) {
+                const int shared_start =
+                    (r + i) * tile_pitch + aligned_halo_x + tx * 4 - radius_x;
+
+                for (int x = 0; x < se_cols + 3; ++x) {
+                    uint8_t value = shared_pixels[shared_start + x];
+
+                    if (x < se_cols && c_se.values[i * se_cols + x] == 1)
+                        acc0 = reduce(acc0, value, is_erosion);
+                    if (x >= 1 && x - 1 < se_cols &&
+                        c_se.values[i * se_cols + x - 1] == 1)
+                        acc1 = reduce(acc1, value, is_erosion);
+                    if (x >= 2 && x - 2 < se_cols &&
+                        c_se.values[i * se_cols + x - 2] == 1)
+                        acc2 = reduce(acc2, value, is_erosion);
+                    if (x >= 3 && x - 3 < se_cols &&
+                        c_se.values[i * se_cols + x - 3] == 1)
+                        acc3 = reduce(acc3, value, is_erosion);
+                }
+            }
+
+            const int output = base + row * WIDTH + output_col;
+            d_out[output] = acc0;
+            if (output_col + 1 < WIDTH) d_out[output + 1] = acc1;
+            if (output_col + 2 < WIDTH) d_out[output + 2] = acc2;
+            if (output_col + 3 < WIDTH) d_out[output + 3] = acc3;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Launcher
+// ---------------------------------------------------------------------------
+
+typedef void (*launch_fn)(const uint8_t* d_in, uint8_t* d_out,
+                          int rows, int cols, int se_rows, int se_cols,
+                          int size, cuda_config cfg);
+
+static void launch_morph(const uint8_t* d_in, uint8_t* d_out,
+                         int rows, int cols, int se_rows, int se_cols,
+                         int size, cuda_config cfg, int is_erosion) {
+    const cudaDeviceProp& prop = device_properties();
+    int threads_x = cfg.block_dim;
+    if (threads_x <= 0 || threads_x > prop.maxThreadsPerBlock) {
+        threads_x = prop.maxThreadsPerBlock;
     }
 
-static void launch_erosion(const u_int8_t* d_in, u_int8_t* d_out, int rows, int cols, int se_rows, int se_cols, int size, int use_shared_memory) {
-    const cudaDeviceProp& device_prop = device_properties();
+    const dim3 block(threads_x, 1, 1);
+    const int rows_per_block = cfg.rows_per_block > 0 ? cfg.rows_per_block : 1;
 
-    int threads_x = device_prop.maxThreadsPerBlock;
-    size_t shared_bytes = (size_t)se_rows * (threads_x + 2 * (se_cols / 2)) * sizeof(u_int8_t);
+    if (cfg.use_shared_memory) {
+        const int output_cols = threads_x * CUDA_SHARED_PIXELS_PER_THREAD;
+        const int radius_x = se_cols / 2;
+        const int aligned_halo_x = (radius_x + 3) & ~3;
+        const int tile_pitch = output_cols + 2 * aligned_halo_x;
+        const int tile_rows = rows_per_block + 2 * (se_rows / 2);
+        const size_t shared_bytes = (size_t)tile_rows * tile_pitch * sizeof(uint8_t);
 
-    dim3 block(threads_x, 1);
-    dim3 grid((cols + threads_x - 1) / threads_x, rows, size);
-
-    if (use_shared_memory) {
-        SharedErosionKernel<<<grid, block, shared_bytes>>>(d_in, d_out, rows, cols);
+        dim3 grid((unsigned int)((cols + output_cols - 1) / output_cols),
+                  (unsigned int)((rows + rows_per_block - 1) / rows_per_block),
+                  (unsigned int)size);
+        SharedMorphKernel<<<grid, block, shared_bytes>>>(d_in, d_out, rows, cols,
+                                                        is_erosion, rows_per_block);
+        check_launch("SharedMorphKernel");
     } else {
-        ErosionKernel<<<grid, block>>>(d_in, d_out, rows, cols);
-    } 
-    check_launch("ErosionKernel");
+        dim3 grid((unsigned int)((cols + threads_x - 1) / threads_x),
+                  (unsigned int)rows,
+                  (unsigned int)size);
+        MorphKernel<<<grid, block>>>(d_in, d_out, rows, cols, is_erosion);
+        check_launch("MorphKernel");
+    }
 }
 
+static void launch_erosion(const uint8_t* d_in, uint8_t* d_out,
+                           int rows, int cols, int se_rows, int se_cols,
+                           int size, cuda_config cfg) {
+    launch_morph(d_in, d_out, rows, cols, se_rows, se_cols, size, cfg, 1);
+}
 
-extern "C" void image_erosion(matrix** img, matrix* structuring_element, matrix* scratch, int size, int use_shared_memory) {
-    int se_rows = structuring_element->rows;
-    int se_cols = structuring_element->cols;
+static void launch_dilation(const uint8_t* d_in, uint8_t* d_out,
+                            int rows, int cols, int se_rows, int se_cols,
+                            int size, cuda_config cfg) {
+    launch_morph(d_in, d_out, rows, cols, se_rows, se_cols, size, cfg, 0);
+}
 
-    // Assuming all images have the same dimensions
-    int rows = img[0]->rows;
-    int cols = img[0]->cols;
+// ---------------------------------------------------------------------------
+// Pipeline
+//
+// I risultati intermedi non lasciano mai la GPU: una sola coppia di transfer per
+// l'intera operazione, qualunque sia il numero di stage.
+// ---------------------------------------------------------------------------
 
-    size_t image_mem_size = (size_t)rows * cols * sizeof(u_int8_t);
-    size_t mem_size = image_mem_size * size;
+static void run_pipeline(matrix** img, matrix* structuring_element, int size,
+                         cuda_config cfg, const launch_fn* stages, int nstages) {
+    if (size <= 0 || nstages <= 0) return;
 
-    u_int8_t* d_img; u_int8_t* d_scratch;
+    const int se_rows = structuring_element->rows;
+    const int se_cols = structuring_element->cols;
 
-    cudaMalloc((void**)&d_img, mem_size);
-    cudaMalloc((void**)&d_scratch, mem_size);
+    // Tutte le immagini del batch hanno le stesse dimensioni.
+    const int rows = img[0]->rows;
+    const int cols = img[0]->cols;
+
+    const size_t image_bytes = (size_t)rows * cols * sizeof(uint8_t);
+    const size_t batch_bytes = image_bytes * size;
+
+    uint8_t* buffers[2];
+    CUDA_CHECK(cudaMalloc((void**)&buffers[0], batch_bytes));
+    CUDA_CHECK(cudaMalloc((void**)&buffers[1], batch_bytes));
     upload_structuring_element(structuring_element);
 
-    double op_t_start = now_seconds();
-
     for (int k = 0; k < size; ++k) {
-        cudaMemcpy(d_img + k * rows * cols, img[k]->data[0], image_mem_size, cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMemcpy(buffers[0] + (size_t)k * rows * cols, img[k]->data[0],
+                              image_bytes, cudaMemcpyHostToDevice));
     }
 
-    launch_erosion(d_img, d_scratch, rows, cols, se_rows, se_cols, size, use_shared_memory);
+    // Nessun evento CUDA: il timer host racchiude soltanto i lanci e attende
+    // esplicitamente che tutti gli stadi siano terminati. H2D e D2H restano
+    // fuori dalla regione cronometrata.
+    CUDA_CHECK(cudaDeviceSynchronize());
+    const double kernel_start = now_seconds();
+
+    int cur = 0;
+    for (int s = 0; s < nstages; ++s) {
+        stages[s](buffers[cur], buffers[1 - cur], rows, cols, se_rows, se_cols, size, cfg);
+        cur = 1 - cur;
+    }
+    CUDA_CHECK(cudaDeviceSynchronize());
+    last_kernel_seconds = (now_seconds() - kernel_start) / size;
 
     for (int k = 0; k < size; ++k) {
-        cudaMemcpy(img[k]->data[0], d_scratch + k * rows * cols, image_mem_size, cudaMemcpyDeviceToHost);
+        CUDA_CHECK(cudaMemcpy(img[k]->data[0], buffers[cur] + (size_t)k * rows * cols,
+                              image_bytes, cudaMemcpyDeviceToHost));
     }
-
-    last_op_seconds = (now_seconds() - op_t_start) / size;
-
-    cudaFree(d_img);
-    cudaFree(d_scratch);
+    CUDA_CHECK(cudaFree(buffers[0]));
+    CUDA_CHECK(cudaFree(buffers[1]));
 }
 
-// Fallback senza shared memory, speculare a ErosionKernel: 0 e' l'elemento neutro
-// del massimo, quindi fuori immagine non alza nulla.
-__global__
-    static void DilationKernel(const u_int8_t* d_img, u_int8_t* d_scratch, int HEIGHT, int WIDTH) {
-        int se_rows = c_se.rows;
-        int se_cols = c_se.cols;
-        int se_radius_y = c_se.radius_y;
-        int se_radius_x = c_se.radius_x;
-
-        int row = blockIdx.y * blockDim.y + threadIdx.y;
-        int col = blockIdx.x * blockDim.x + threadIdx.x;
-        int chunk = blockIdx.z; // Get the index of the image in the array
-        if (row >= HEIGHT || col >= WIDTH) return; // Check if the thread is within the image bounds
-
-        size_t base = (size_t)chunk * HEIGHT * WIDTH; // Offset of this image inside the batch
-        u_int8_t max_value = 0;
-
-        for (int i = 0; i < se_rows; ++i) {
-            for (int j = 0; j < se_cols; ++j) {
-                int img_row = row + i - se_radius_y;
-                int img_col = col + j - se_radius_x;
-
-                if (img_row >= 0 && img_row < HEIGHT && img_col >= 0 && img_col < WIDTH) {
-                    if (c_se.values[i * se_cols + j] == 1) {
-                        max_value = max(max_value, d_img[base + (size_t)img_row * WIDTH + img_col]);
-                    }
-                }
-            }
-        }
-        d_scratch[base + (size_t)row * WIDTH + col] = max_value;
-    }
-
-__global__
-    static void SharedDilationKernel(const u_int8_t* d_img, u_int8_t* d_scratch, int HEIGHT, int WIDTH) {
-        // extern: la dimensione del tile arriva dal terzo argomento di <<<>>>,
-        // perche' dipende da blockDim.x che e' scelto al launch.
-        extern __shared__ u_int8_t shared_pixels[];
-
-        int se_rows = c_se.rows;
-        int se_cols = c_se.cols;
-        int se_radius_y = c_se.radius_y;
-        int se_radius_x = c_se.radius_x;
-
-        int tx = threadIdx.x;
-        int row = blockIdx.y; // un blocco per riga dell'immagine
-        int col = blockIdx.x * blockDim.x + tx;
-        int chunk = blockIdx.z; // Get the index of the image in the array
-
-        size_t base = (size_t)chunk * HEIGHT * WIDTH; // Offset of this image inside the batch
-        int tile_cols = blockDim.x + 2 * se_radius_x; // stride di una riga del tile
-
-        for (int i = 0; i < se_rows; ++i) {
-            int img_row = row + i - se_radius_y;
-            for (int s = tx; s < tile_cols; s += blockDim.x) {
-                int img_col = blockIdx.x * blockDim.x + s - se_radius_x;
-                shared_pixels[i * tile_cols + s] =
-                    (img_row >= 0 && img_row < HEIGHT && img_col >= 0 && img_col < WIDTH)
-                    ? d_img[base + (size_t)img_row * WIDTH + img_col]
-                    : 0;
-            }
-        }
-        __syncthreads();
-
-        if (col >= WIDTH) return; // Check if the thread is within the image bounds
-
-        u_int8_t max_value = 0;
-        for (int i = 0; i < se_rows; ++i) {
-            for (int j = 0; j < se_cols; ++j) {
-                if (c_se.values[i * se_cols + j] == 1) {
-                    max_value = max(max_value, shared_pixels[i * tile_cols + tx + j]);
-                }
-            }
-        }
-        d_scratch[base + (size_t)row * WIDTH + col] = max_value;
-    }
-
-static void launch_dilation(const u_int8_t* d_in, u_int8_t* d_out, int rows, int cols, int se_rows, int se_cols, int size, int use_shared_memory) {
-    const cudaDeviceProp& device_prop = device_properties();
-
-    int threads_x = device_prop.maxThreadsPerBlock;
-    size_t shared_bytes = (size_t)se_rows * (threads_x + 2 * (se_cols / 2)) * sizeof(u_int8_t);
-
-    dim3 block(threads_x, 1);
-    dim3 grid((cols + threads_x - 1) / threads_x, rows, size);
-
-    if (use_shared_memory) {
-        SharedDilationKernel<<<grid, block, shared_bytes>>>(d_in, d_out, rows, cols);
-    } else {
-        DilationKernel<<<grid, block>>>(d_in, d_out, rows, cols);
-    }
-    check_launch("DilationKernel");
+extern "C" void image_erosion(matrix** img, matrix* structuring_element,
+                              int size, cuda_config cfg) {
+    static const launch_fn stages[] = { launch_erosion };
+    run_pipeline(img, structuring_element, size, cfg, stages, 1);
 }
 
-// image_opening = erosione seguita da dilatazione. I due kernel girano uno dopo
-// l'altro sull'intero batch e il risultato intermedio non lascia mai la GPU: una
-// sola coppia di transfer per l'intera operazione.
-extern "C" void image_opening(matrix** img, matrix* structuring_element, matrix* scratch, int size, int use_shared_memory) {
-    (void)scratch; // niente padding: il bounds check nel kernel fa lo stesso lavoro
-
-    int se_rows = structuring_element->rows;
-    int se_cols = structuring_element->cols;
-
-    // Assuming all images have the same dimensions
-    int rows = img[0]->rows;
-    int cols = img[0]->cols;
-
-    size_t image_mem_size = (size_t)rows * cols * sizeof(u_int8_t);
-    size_t mem_size = image_mem_size * size;
-
-    u_int8_t* d_img; u_int8_t* d_intermediate;
-
-    cudaMalloc((void**)&d_img, mem_size);
-    cudaMalloc((void**)&d_intermediate, mem_size);
-    upload_structuring_element(structuring_element);
-
-    double op_t_start = now_seconds();
-
-    for (int k = 0; k < size; ++k) {
-        cudaMemcpy(d_img + k * rows * cols, img[k]->data[0], image_mem_size, cudaMemcpyHostToDevice);
-    }
-
-    launch_erosion(d_img, d_intermediate, rows, cols, se_rows, se_cols, size, use_shared_memory);
-    launch_dilation(d_intermediate, d_img, rows, cols, se_rows, se_cols, size, use_shared_memory);
-
-    for (int k = 0; k < size; ++k) {
-        cudaMemcpy(img[k]->data[0], d_img + k * rows * cols, image_mem_size, cudaMemcpyDeviceToHost);
-    }
-
-    last_op_seconds = (now_seconds() - op_t_start) / size;
-
-    cudaFree(d_img);
-    cudaFree(d_intermediate);
+extern "C" void image_opening(matrix** img, matrix* structuring_element,
+                              int size, cuda_config cfg) {
+    static const launch_fn stages[] = { launch_erosion, launch_dilation };
+    run_pipeline(img, structuring_element, size, cfg, stages, 2);
 }

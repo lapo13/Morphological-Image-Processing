@@ -6,16 +6,16 @@
 //   -DSEQ_SUFFIX=_simd                                   -> auto-vettorizzato
 //   -DSEQ_SUFFIX=_scalar -fno-vectorize -fno-slp-vectorize -> scalare
 // I due oggetti convivono nello stesso binario perche' ogni simbolo pubblico
-// porta il suffisso. Vedi sequential.h per il perche' servono entrambi.
+// porta il suffisso. Vedi reference.h per il perche' servono entrambi.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#include "sequential.h"
+#include "reference.h"
 
 #ifndef SEQ_SUFFIX
-#error "sequential.c va compilato con -DSEQ_SUFFIX=_scalar oppure -DSEQ_SUFFIX=_simd"
+#error "reference.c va compilato con -DSEQ_SUFFIX=_scalar oppure -DSEQ_SUFFIX=_simd"
 #endif
 
 #define SEQ_CAT_(a, b) a##b

@@ -1,5 +1,5 @@
-#ifndef SEQUENTIAL_H
-#define SEQUENTIAL_H
+#ifndef REFERENCE_H
+#define REFERENCE_H
 
 #include "matrix.h"
 
@@ -8,7 +8,7 @@
 // finestra scorrevole con maschera -> crop), cosi' l'unica variabile fra le
 // versioni e' la parallelizzazione.
 //
-// sequential.c viene compilato DUE volte con flag diversi (vedi Makefile),
+// reference.c viene compilato DUE volte con flag diversi (vedi Makefile),
 // producendo due varianti dello stesso codice sorgente:
 //
 //   _scalar : compilato con -fno-vectorize -fno-slp-vectorize.
