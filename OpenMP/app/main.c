@@ -81,7 +81,7 @@ static void benchmark_parallel(morph_op op, const char* label, matrix* se, matri
     for (int r = 0; r < TIMED_RUNS; r++) {
         for (int k = 0; k < batch_size; k++) copy_matrix(&source[k], &working[k]);
         op(batch, se, scratch, batch_size);
-        #pragma omp single
+        #pragma omp master
         {
             double d = last_op_seconds;
             run_samples[sample_count++] = (timing_sample){label, r, d};
@@ -95,6 +95,7 @@ static void benchmark_parallel(morph_op op, const char* label, matrix* se, matri
         printf("  %-9s mean=%.5f s  min=%.5f s  (per immagine)\n",
                label, sum / TIMED_RUNS, min);
     }
+    #pragma omp barrier
 }
 
 typedef void (*seq_batch_op)(matrix**, matrix*, int);
