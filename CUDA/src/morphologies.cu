@@ -65,8 +65,10 @@ __global__ void MorphKernel(const uint8_t* d_in, uint8_t* d_out, int HEIGHT, int
     const int radius_y = c_se.radius_y;
     const int radius_x = c_se.radius_x;
 
-    const int col = blockIdx.x * blockDim.x + threadIdx.x;
-    const int row = blockIdx.y;
+    // grid.x segue l'altezza (limite molto ampio), mentre grid.y contiene solo
+    // i pochi gruppi orizzontali. Cosi' l'altezza non e' vincolata a 65535.
+    const int col = blockIdx.y * blockDim.x + threadIdx.x;
+    const int row = blockIdx.x * blockDim.y + threadIdx.y;
     const int chunk = blockIdx.z;
     if (row >= HEIGHT || col >= WIDTH) return;
 
@@ -198,10 +200,10 @@ static void launch_morph(const uint8_t* d_in, uint8_t* d_out,
         threads_x = prop.maxThreadsPerBlock;
     }
 
-    const dim3 block(threads_x, 1, 1);
     const int rows_per_block = cfg.rows_per_block > 0 ? cfg.rows_per_block : 1;
 
     if (cfg.use_shared_memory) {
+        const dim3 block(threads_x, 1, 1);
         const int output_cols = threads_x * CUDA_SHARED_PIXELS_PER_THREAD;
         const int radius_x = se_cols / 2;
         const int aligned_halo_x = (radius_x + 3) & ~3;
@@ -216,9 +218,16 @@ static void launch_morph(const uint8_t* d_in, uint8_t* d_out,
                                                         is_erosion, rows_per_block);
         check_launch("SharedMorphKernel");
     } else {
-        dim3 grid((unsigned int)((cols + threads_x - 1) / threads_x),
-                  (unsigned int)rows,
-                  (unsigned int)size);
+        const int max_block_rows = prop.maxThreadsPerBlock / threads_x;
+        const int block_rows = rows_per_block < max_block_rows
+                                   ? rows_per_block
+                                   : max_block_rows;
+        const dim3 block(threads_x, block_rows, 1);
+        const unsigned int blocks_per_row =
+            (unsigned int)((cols + threads_x - 1) / threads_x);
+        const unsigned int block_rows_count =
+            (unsigned int)((rows + block_rows - 1) / block_rows);
+        dim3 grid(block_rows_count, blocks_per_row, (unsigned int)size);
         MorphKernel<<<grid, block>>>(d_in, d_out, rows, cols, is_erosion);
         check_launch("MorphKernel");
     }
@@ -237,8 +246,6 @@ static void launch_dilation(const uint8_t* d_in, uint8_t* d_out,
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline
-//
 // I risultati intermedi non lasciano mai la GPU: una sola coppia di transfer per
 // l'intera operazione, qualunque sia il numero di stage.
 // ---------------------------------------------------------------------------
@@ -267,9 +274,6 @@ static void run_pipeline(matrix** img, matrix* structuring_element, int size,
                               image_bytes, cudaMemcpyHostToDevice));
     }
 
-    // Nessun evento CUDA: il timer host racchiude soltanto i lanci e attende
-    // esplicitamente che tutti gli stadi siano terminati. H2D e D2H restano
-    // fuori dalla regione cronometrata.
     CUDA_CHECK(cudaDeviceSynchronize());
     const double kernel_start = now_seconds();
 

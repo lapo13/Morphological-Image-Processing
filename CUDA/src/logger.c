@@ -24,7 +24,7 @@ static int append_samples(const char* path, const char* run_id, run_config cfg,
     }
 
     for (int i = 0; i < count; i++) {
-        fprintf(f, "%s,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%s,%d,%.6f\n",
+        fprintf(f, "%s,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%s,%d,%.9f\n",
                 run_id, cfg.mode, cfg.implementation,
                 cfg.block_dim, cfg.sm_count, cfg.use_shared,
                 cfg.rows_per_block, cfg.se_size, cfg.image_rows, cfg.image_cols, cfg.batch,
@@ -40,7 +40,7 @@ void log_timings_csv(const char* run_id, run_config cfg, timing_sample* samples,
 
     if (!append_samples(RESULTS_FILE, run_id, cfg, samples, count)) return;
 
-    printf("  -> %d campioni kernel in %s (%s, block=%d, shared=%d, rows/blk=%d, se=%dx%d, image=%dx%d)\n",
+    printf("  -> %d campioni kernel in %s (%s, threads_x=%d, shared=%d, output rows/blk=%d, se=%dx%d, image=%dx%d)\n",
            count, RESULTS_FILE, cfg.mode, cfg.block_dim, cfg.use_shared,
            cfg.rows_per_block, cfg.se_size, cfg.se_size, cfg.image_rows, cfg.image_cols);
 }

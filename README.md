@@ -257,19 +257,21 @@ rispettano invece la maschera generica memorizzata in constant memory.
 
 ### Kernel naïve
 
-Il mapping è quello CUDA naturale, senza griglie persistenti o grid-stride loop:
+Ogni thread calcola un pixel. Il blocco del benchmark è bidimensionale e copre
+256 colonne per 4 righe, per un totale di 1024 thread:
 
 ```c
-col   = blockIdx.x * blockDim.x + threadIdx.x;
-row   = blockIdx.y;
+col = blockIdx.y * blockDim.x + threadIdx.x;
+row = blockIdx.x * blockDim.y + threadIdx.y;
 chunk = blockIdx.z;
 ```
 
-Ogni thread calcola un pixel e attraversa tutte le celle attive dell'elemento
-strutturante. Il blocco del benchmark contiene 256 thread, cioè 8 warp, e la
-griglia ha dimensioni `ceil(width / 256) × height × batch`. Il numero di blocchi
-non è un parametro del benchmark e non viene registrato: è una conseguenza
-della dimensione dell'immagine e CUDA li distribuisce autonomamente sugli SM.
+Ogni thread attraversa tutte le celle attive dell'elemento strutturante. I
+gruppi verticali usano `grid.x`, che ammette una dimensione molto maggiore,
+mentre `grid.y` contiene soltanto i gruppi orizzontali e `grid.z` seleziona
+l'immagine del batch. La griglia ha quindi dimensioni
+`ceil(height / 4) × ceil(width / 256) × batch`. Questo mapping evita il limite
+di 65.535 blocchi su `grid.y` quando l'altezza supera 65.535 pixel.
 
 ### Kernel tiled/shared
 
@@ -315,14 +317,14 @@ costante il lavoro per risorsa.
 
 | Parametro | Valori |
 |---|---|
-| Larghezza immagine | 4096 pixel, 8 tile |
-| Altezza immagine | 512, 1024, 2048, 4096, 8192, 16384, 32768 pixel |
-| Batch | 8 immagini |
+| Larghezza immagine | 1024 pixel, 2 tile |
+| Altezza immagine | 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144 pixel |
+| Batch | 4 immagini |
 | Elemento strutturante | 3×3, 5×5, 9×9; forma piena e invariata |
 | Operazioni | erosione, opening |
 | Implementazioni | naïve/global, tiled/shared |
-| Thread per blocco | 256 |
-| Righe per blocco shared | 8 |
+| Blocco naïve | 256×4 = 1024 thread; un pixel per thread |
+| Blocco shared | 256 thread; quattro colonne × 8 righe per thread |
 | Warm-up / misure | 2 / 10 per configurazione |
 
 La dimensione dell'SE modifica il lavoro per pixel mantenendone fissa la forma:

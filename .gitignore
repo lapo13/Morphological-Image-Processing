@@ -11,3 +11,4 @@ CUDA/main
 CUDA/output
 CUDA/app/hardware_cap.c
 CUDA/analysis
+template

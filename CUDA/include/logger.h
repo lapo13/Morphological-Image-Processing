@@ -4,16 +4,8 @@
 typedef struct {
     const char* operation;
     int run_index;
-    // Tempo della sola regione dei kernel, osservato dal timer host.
     double seconds;
 } timing_sample;
-
-// Configurazione di una serie di misure, scritta come colonne del CSV.
-//
-// mode: "problem_size" -> la griglia CUDA naturale cresce con l'immagine.
-//
-// implementation: "cuda". Il riferimento CPU è usato soltanto per validare
-//                 l'output e non viene cronometrato né registrato.
 
 typedef struct {
     const char* mode;

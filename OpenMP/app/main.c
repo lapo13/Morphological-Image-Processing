@@ -81,7 +81,7 @@ static void benchmark_parallel(morph_op op, const char* label, matrix* se, matri
     for (int r = 0; r < TIMED_RUNS; r++) {
         for (int k = 0; k < batch_size; k++) copy_matrix(&source[k], &working[k]);
         op(batch, se, scratch, batch_size);
-        #pragma omp master
+        #pragma omp single
         {
             double d = last_op_seconds;
             run_samples[sample_count++] = (timing_sample){label, r, d};
@@ -343,9 +343,6 @@ int main(void) {
 
         printf("\n===== Elemento strutturante %dx%d =====\n", se_size, se_size);
 
-        // Riferimento: carico base, una sola riga di tile, eseguito dal baseline
-        // sequenziale vettorizzato. E' il T(1) rispetto a cui si misura di quanto
-        // cresce il lavoro svolto a parita' di tempo.
         for (int k = 0; k < WEAK_BATCH; k++)
             build_mosaic_image(&source[k], &tile_buffer,
                                (const char**)&tiles[k * WEAK_COLS], 1, WEAK_COLS);

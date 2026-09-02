@@ -14,13 +14,13 @@
 #define WARMUP_RUNS 2
 #define TIMED_RUNS 10
 
-// Sweep della dimensione: larghezza fissa di 8 tile (4096 pixel) e altezza
-// crescente per potenze di due. La GPU riceve sempre la griglia naturale.
-#define PROBLEM_COLS  8
-#define PROBLEM_BATCH 8
+// Sweep della dimensione: larghezza fissa di 2 tile (1024 pixel) e altezza
+// crescente per potenze di due.
+#define PROBLEM_COLS  2
+#define PROBLEM_BATCH 4
 #define MAX_BATCH PROBLEM_BATCH
 
-static const int TEST_GRID_ROWS[] = {1, 2, 4, 8, 16, 32, 64};
+static const int TEST_GRID_ROWS[] = {2, 4, 8, 16, 32, 64, 128, 256, 512};
 #define NUM_GRID_ROWS (int)(sizeof(TEST_GRID_ROWS) / sizeof(TEST_GRID_ROWS[0]))
 
 // Validazione: mosaico piccolo e batch ridotto, perché il confronto è contro un
@@ -36,14 +36,15 @@ static const int VALIDATION_BLOCK_DIMS[] = {128, 256, 512, 1024};
 #define NUM_VALIDATION_BLOCK_DIMS \
     (int)(sizeof(VALIDATION_BLOCK_DIMS) / sizeof(VALIDATION_BLOCK_DIMS[0]))
 
-// La validazione prova più altezze del tile shared. La baseline global è
-// volutamente naïve e ignora questo parametro.
+// La validazione prova più altezze del tile shared. Nel kernel naïve il campo
+// indica invece la dimensione Y del blocco CUDA.
 static const int VALIDATION_ROWS_PER_BLOCK[] = {1, 4, 8, 16};
 #define NUM_VALIDATION_ROWS_PER_BLOCK \
     (int)(sizeof(VALIDATION_ROWS_PER_BLOCK) / sizeof(VALIDATION_ROWS_PER_BLOCK[0]))
 
 // Parametri fissi delle due implementazioni durante lo sweep.
 #define BENCHMARK_BLOCK_DIM 256
+#define NAIVE_BLOCK_ROWS 4
 #define SHARED_TILE_ROWS 8
 
 #define MAX_SAMPLES (2 * TIMED_RUNS)
@@ -137,7 +138,7 @@ static int validate_op(const char* label, morph_op gpu_op, ref_op cpu_op,
     cpu_op(ref_batch, se, batch_size);
 
     int diffs = compare_batches(batch, ref_batch, batch_size);
-    printf("    %-9s block=%-5d shared=%d rows/blk=%-3d -> %s (%d pixel diversi)\n",
+    printf("    %-9s threads_x=%-4d shared=%d output rows/blk=%-3d -> %s (%d pixel diversi)\n",
            label, cfg.block_dim, cfg.use_shared_memory, cfg.rows_per_block,
            diffs == 0 ? "ok" : "FAIL", diffs);
     return diffs;
@@ -164,16 +165,15 @@ static int run_validation(matrix* structuring_element, int max_threads) {
             if (block_dim > max_threads) continue;
 
             for (int shared = 0; shared <= 1; shared++) {
-                // Con quattro pixel orizzontali per thread, 512/1024 thread
-                // produrrebbero tile shared molto piu' larghi del benchmark e,
-                // per SE 9x9, potrebbero superare il limite per blocco. Restano
-                // comunque validati per il kernel naive.
                 if (shared && block_dim > BENCHMARK_BLOCK_DIM) continue;
 
                 int num_r = shared ? NUM_VALIDATION_ROWS_PER_BLOCK : 1;
 
                 for (int rr = 0; rr < num_r; rr++) {
-                    int rows_per_block = shared ? VALIDATION_ROWS_PER_BLOCK[rr] : 1;
+                    int rows_per_block = shared ? VALIDATION_ROWS_PER_BLOCK[rr]
+                                                : NAIVE_BLOCK_ROWS;
+                    if (!shared && block_dim * rows_per_block > max_threads)
+                        rows_per_block = max_threads / block_dim;
                     cuda_config cfg = {shared, block_dim, rows_per_block};
 
                     failures += validate_op("erosion", image_erosion, ref_erosion,
@@ -263,7 +263,7 @@ int main(void) {
             for (int shared = 0; shared <= 1; shared++) {
                 cuda_config cfg = {
                     shared, BENCHMARK_BLOCK_DIM,
-                    shared ? SHARED_TILE_ROWS : 1
+                    shared ? SHARED_TILE_ROWS : NAIVE_BLOCK_ROWS
                 };
 
                 printf("\n--- immagine %dx%d, %s ---\n",
